@@ -1,3 +1,4 @@
+use compiler::ast::*;
 // lalrpop 里的约定
 grammar;
 
@@ -13,22 +14,22 @@ match {
 
 // 定义 CompUnit, 其返回值类型为 String
 // parser 在解析完成后的行为是返回 FuncDef 的值
-pub CompUnit: String = <func_def: FuncDef> => func_def;
+pub CompUnit: CompUnit = <func_def: FuncDef> => CompUnit { <> };
 
 // 同上, 不解释
-FuncDef: String = {
+FuncDef: FuncDef = {
   <func_type: FuncType> <id: Ident> "(" ")" <block: Block> => {
-    format!("{} {}() {}", func_type, id, block)
+    FuncDef { <> }
   }
 }
 
-FuncType: String = "int" => "int".to_string();
+FuncType: FuncType = "int" => FuncType::Int;
 
-Block: String = "{" <stmt: Stmt> "}" => format!("{{ {} }}", stmt);
+Block: Block = "{" <stmt: Stmt> "}" => Block { <> };
 
-Stmt: String = "return" <num: Number> ";" => format!("return {};", num);
+Stmt: Stmt = "return" <num: Number> ";" => Stmt { <> };
 
-Number: String = <num: IntConst> => num.to_string();
+Number: i32 = <num: IntConst> => <>;
 
 // 如果匹配到标识符, 就返回这个字符串
 // 一对尖括号在此处指代的是正则表达式匹配到的字符串 (&str)
@@ -37,7 +38,7 @@ Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();
 
 // 对整数字面量的处理方式: 把匹配到的字符串按对应进制转换成数字
 IntConst: i32 = {
-  r"[1-9][0-9]*" => i32::from_str_radix(<>, 10).unwrap(),
-  r"0[0-7]*" => i32::from_str_radix(<>, 8).unwrap(),
+  r"[1-9][0-9]*" => i32::from_str_radix(<> , 10).unwrap(),
+  r"0[0-7]*" => i32::from_str_radix(<> , 8).unwrap(),
   r"0[xX][0-9a-fA-F]+" => i32::from_str_radix(&<>[2..], 16).unwrap(),
 }
