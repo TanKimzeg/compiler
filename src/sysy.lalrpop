@@ -12,11 +12,8 @@ match {
   _
 }
 
-// 定义 CompUnit, 其返回值类型为 String
-// parser 在解析完成后的行为是返回 FuncDef 的值
 pub CompUnit: CompUnit = <func_def: FuncDef> => CompUnit { <> };
 
-// 同上, 不解释
 FuncDef: FuncDef = {
   <func_type: FuncType> <id: Ident> "(" ")" <block: Block> => {
     FuncDef { <> }
@@ -27,9 +24,27 @@ FuncType: FuncType = "int" => FuncType::Int;
 
 Block: Block = "{" <stmt: Stmt> "}" => Block { <> };
 
-Stmt: Stmt = "return" <num: Number> ";" => Stmt { <> };
+Stmt: Stmt = "return" <exp: Exp> ";" => Stmt { <> };
+
+Exp: Exp = <unary_exp: UnaryExp> => Exp{ <> };
+
+UnaryExp: UnaryExp = {
+  <pexp: PrimaryExp> => UnaryExp::new_pexp(<>),
+  <u_op: UnaryOP> <u_exp: UnaryExp> => UnaryExp::new_opexp(u_op, u_exp),
+};
+
+PrimaryExp: PrimaryExp = {
+  "(" <exp: Exp> ")" => PrimaryExp::new_exp(exp),
+  <num: Number> => PrimaryExp::new_num(num),
+};
 
 Number: i32 = <num: IntConst> => <>;
+
+UnaryOP: UnaryOP = {
+  "+" => UnaryOP::Plus,
+  "-" => UnaryOP::Minus,
+  "!" => UnaryOP::Not,
+};
 
 // 如果匹配到标识符, 就返回这个字符串
 // 一对尖括号在此处指代的是正则表达式匹配到的字符串 (&str)

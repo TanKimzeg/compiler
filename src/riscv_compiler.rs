@@ -9,7 +9,7 @@ pub fn riscv_text(program: Program) -> String {
         let func_data = program.func(func);
         println!("function {}:", func_data.name());
         asm_text.push_str(format!("{}:\n", &func_data.name()[1..]).as_str());
-        for (&bb, node) in func_data.layout().bbs() {
+        for (&_bb, node) in func_data.layout().bbs() {
             
             for &inst in node.insts().keys() {
 
