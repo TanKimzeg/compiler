@@ -1,10 +1,8 @@
-#[derive(Debug)]
 pub struct CompUnit {
     pub func_def: FuncDef,
 
 }
 
-#[derive(Debug)]
 pub struct FuncDef {
     pub func_type: FuncType,
     pub id: String,
@@ -16,53 +14,81 @@ pub enum FuncType {
     Int,
 }
 
-#[derive(Debug)]
 pub struct Block {
     pub stmt: Stmt,
 }
 
-#[derive(Debug)]
 pub enum Stmt {
     Ret(Exp),
 }
 
-#[derive(Debug, Clone)]
+trait Executable { }
+
 pub enum Exp {
-    AddExp(AddExp),
+    LOrExp(LOrExp),
 }
 
-#[derive(Debug, Clone)]
+pub enum LOrExp {
+    Single(LAndExp),
+    // OAExp(Box<LOrExp>, Box<LAndExp>),
+    Binary(Box<Binary<LOrExp, LAndExp>>),
+}
+impl Executable for LOrExp {}
+
+pub enum LAndExp {
+    Single(EqExp),
+    Binary(Box<Binary<LAndExp, EqExp>>),
+}
+impl Executable for LAndExp {}
+
+
+pub enum EqExp {
+    Single(RelExp),
+    Binary(Box<Binary<EqExp, RelExp>>),
+}
+impl Executable for EqExp {}
+
+pub enum RelExp {
+    Single(AddExp),
+    // ROAExp(Box<RelExp>, RelOp, Box<AddExp>),
+    Binary(Box<Binary<RelExp, AddExp>>),
+}
+impl Executable for RelExp {}
+
 pub enum AddExp {
-    MulExp(MulExp),
-    AOMExp(Box<AddExp>, AddOp, Box<MulExp>),
+    Single(MulExp),
+    // AOMExp(Box<AddExp>, AddOp, Box<MulExp>),
+    Binary(Box<Binary<AddExp, MulExp>>),
+}
+impl Executable for AddExp {}
+
+pub enum BinOp {
+    Add, Sub,
+    Mul, Div, Mod,
+    LT, GT, LE, GE,
+    Eq, NEq,
+    LAnd, LOr,
 }
 
-#[derive(Debug, Clone)]
-pub enum AddOp {
-    Add,
-    Sub,
-}
-
-#[derive(Debug, Clone)]
 pub enum MulExp {
-    UnaryExp(UnaryExp),
-    MOUExp(Box<MulExp>, MulOp, Box<UnaryExp>),
+    Single(UnaryExp),
+    // MOUExp(Box<MulExp>, MulOp, Box<UnaryExp>),
+    Binary(Box<Binary<MulExp, UnaryExp>>),
+}
+impl Executable for MulExp {}
+
+pub struct Binary<T, S> {
+    pub lhs: Box<T>,
+    pub op: BinOp,
+    pub rhs: Box<S>,
 }
 
-#[derive(Debug, Clone)]
-pub enum MulOp {
-    Mul,
-    Div,
-    Mod,
-}
 
-#[derive(Debug, Clone)]
 pub enum UnaryExp {
     PExp(PrimaryExp),
     OpExp(UnaryOP, Box<UnaryExp>),
 }
 
-#[derive(Debug, Clone)]
 pub enum PrimaryExp {
     Exp(Box<Exp>),
     Number(i32),

@@ -171,6 +171,40 @@ impl ValueKindExt for values::Binary {
         asm_text.push_str(format!("\trem {}, {}, {}\n", 
                           target_reg.to_string(), lhs_val, rhs_val).as_str());
       },
+      BinaryOp::Or => {
+        asm_text.push_str(format!("\tor {}, {}, {}\n", 
+                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+      },
+      BinaryOp::And => {
+        asm_text.push_str(format!("\tand {}, {}, {}\n", 
+                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+      },
+      BinaryOp::NotEq => {
+        asm_text.push_str(format!("\txor {}, {}, {}\n", 
+                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+        asm_text.push_str(format!("\tsnez {}, {}\n", 
+                          target_reg.to_string(), target_reg).as_str());
+      },
+      BinaryOp::Lt => {
+        asm_text.push_str(format!("\tslt {}, {}, {}\n", 
+                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+      },
+      BinaryOp::Le => {
+        asm_text.push_str(format!("\tsgt {}, {}, {}\n", 
+                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+        asm_text.push_str(format!("\tseqz {}, {}\n", 
+                          target_reg.to_string(), target_reg).as_str());
+      },
+      BinaryOp::Gt => {
+        asm_text.push_str(format!("\tsgt {}, {}, {}\n", 
+                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+      },
+      BinaryOp::Ge => {
+        asm_text.push_str(format!("\tslt {}, {}, {}\n", 
+                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+        asm_text.push_str(format!("\tseqz {}, {}\n", 
+                          target_reg.to_string(), target_reg).as_str());
+      },
       _ => unimplemented!("{}", format!("Unsupported binary operation: {:?}", op)),
 
     }

@@ -26,29 +26,82 @@ Block: Block = "{" <stmt: Stmt> "}" => Block { <> };
 
 Stmt: Stmt = "return" <exp: Exp> ";" => Stmt::Ret(<>);
 
-Exp: Exp = <add_exp: AddExp> => Exp::AddExp(<>);
+Exp: Exp = <add_exp: LOrExp> => Exp::LOrExp(<>);
 
-AddExp: AddExp = {
-  <mul_exp: MulExp> => AddExp::MulExp(<>),
-  <add_exp: AddExp> <add_op: AddOp> <mul_exp: MulExp> =>
-    AddExp::AOMExp(Box::new(add_exp), add_op, Box::new(mul_exp))
+LOrExp: LOrExp = {
+  <land_exp: LAndExp> => LOrExp::Single(<>),
+  <lor_exp: LOrExp> "||" <land_exp: LAndExp> =>
+    LOrExp::Binary(Box::new(
+      Binary { lhs: Box::new(lor_exp), op: BinOp::LOr, rhs: Box::new(land_exp) }
+    ))
 };
 
-AddOp: AddOp = {
-  "+" => AddOp::Add,
-  "-" => AddOp::Sub,
+LAndExp: LAndExp = {
+  <eq_exp: EqExp> => LAndExp::Single(<>),
+  <land_exp: LAndExp> "&&" <eq_exp: EqExp> =>
+    LAndExp::Binary(Box::new(
+      Binary { lhs: Box::new(land_exp), op: BinOp::LAnd, rhs: Box::new(eq_exp) }
+    )),
+};
+
+EqExp: EqExp = {
+  <rel_exp: RelExp> => EqExp::Single(<>),
+  <eq_exp: EqExp> "==" <rel_exp: RelExp> =>
+    EqExp::Binary(Box::new(
+      Binary { lhs: Box::new(eq_exp), op: BinOp::Eq, rhs: Box::new(rel_exp) }
+    )),
+  <eq_exp: EqExp> "!=" <rel_exp: RelExp> =>
+    EqExp::Binary(Box::new(
+      Binary { lhs: Box::new(eq_exp), op: BinOp::NEq, rhs: Box::new(rel_exp) }
+    )),
+};
+
+RelExp: RelExp = {
+  <add_exp: AddExp> => RelExp::Single(<>),
+  <rel_exp: RelExp> "<" <add_exp: AddExp> =>
+    RelExp::Binary(Box::new(
+      Binary { lhs: Box::new(rel_exp), op: BinOp::LT, rhs: Box::new(add_exp) }
+    )),
+  <rel_exp: RelExp> ">" <add_exp: AddExp> =>
+    RelExp::Binary(Box::new(
+      Binary { lhs: Box::new(rel_exp), op: BinOp::GT, rhs: Box::new(add_exp) }
+    )),
+  <rel_exp: RelExp> "<=" <add_exp: AddExp> =>
+    RelExp::Binary(Box::new(
+      Binary { lhs: Box::new(rel_exp), op: BinOp::LE, rhs: Box::new(add_exp) }
+    )),
+  <rel_exp: RelExp> ">=" <add_exp: AddExp> =>
+    RelExp::Binary(Box::new(
+      Binary { lhs: Box::new(rel_exp), op: BinOp::GE, rhs: Box::new(add_exp) }
+    )),
+};
+
+AddExp: AddExp = {
+  <mul_exp: MulExp> => AddExp::Single(<>),
+  <add_exp: AddExp> "+" <mul_exp: MulExp> =>
+    AddExp::Binary(Box::new(
+      Binary { lhs: Box::new(add_exp), op: BinOp::Add, rhs: Box::new(mul_exp) }
+    )),
+  <add_exp: AddExp> "-" <mul_exp: MulExp> =>
+    AddExp::Binary(Box::new(
+      Binary { lhs: Box::new(add_exp), op: BinOp::Sub, rhs: Box::new(mul_exp) }
+    )),
 };
 
 MulExp: MulExp = {
-  <unary_exp: UnaryExp> => MulExp::UnaryExp(<>),
-  <mul_exp: MulExp> <mul_op: MulOp> <unary_exp: UnaryExp> => 
-    MulExp::MOUExp(Box::new(mul_exp), mul_op, Box::new(unary_exp))
-};
-
-MulOp: MulOp = {
-  "*" => MulOp::Mul,
-  "/" => MulOp::Div,
-  "%" => MulOp::Mod,
+  <unary_exp: UnaryExp> => MulExp::Single(<>),
+  <mul_exp: MulExp> "*" <unary_exp: UnaryExp> => 
+    MulExp::Binary(Box::new(
+      Binary { lhs: Box::new(mul_exp), op: BinOp::Mul, rhs: Box::new(unary_exp) }
+    )),
+  <mul_exp: MulExp> "/" <unary_exp: UnaryExp> => 
+    MulExp::Binary(Box::new(
+      Binary { lhs: Box::new(mul_exp), op: BinOp::Div, rhs: Box::new(unary_exp) }
+    )),
+  <mul_exp: MulExp> "%" <unary_exp: UnaryExp> => 
+    MulExp::Binary(Box::new(
+      Binary { lhs: Box::new(mul_exp), op: BinOp::Mod, rhs: Box::new(unary_exp) }
+    )),
 };
 
 UnaryExp: UnaryExp = {

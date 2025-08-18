@@ -48,7 +48,51 @@ impl Compile for PrimaryExp {
 impl Compile for Exp {
   fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
     match self {
-      Exp::AddExp(add_exp) => add_exp.compile(bb, func_data),
+      Exp::LOrExp(lor_exp) => lor_exp.compile(bb, func_data),
+    }
+  }
+}
+
+impl Compile for LOrExp {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
+      match self {
+        LOrExp::Single(land_exp) => land_exp.compile(bb, func_data),
+        LOrExp::Binary(binary) => {
+          binary.compile(bb, func_data)
+        }
+      }
+  } 
+}
+
+impl Compile for LAndExp {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
+      match self {
+        LAndExp::Single(eq_exp) => eq_exp.compile(bb, func_data),
+        LAndExp::Binary(binary) => {
+          binary.compile(bb, func_data)
+        }
+      }
+  }  
+}
+
+impl Compile for EqExp {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
+    match self {
+      EqExp::Single(rel_exp) => rel_exp.compile(bb, func_data),
+      EqExp::Binary(binary) => {
+        binary.compile(bb, func_data)
+      }
+    }
+  }
+}
+
+impl Compile for RelExp {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
+    match self {
+      RelExp::Single(add_exp) => add_exp.compile(bb, func_data),
+      RelExp::Binary(binary) => {
+        binary.compile(bb, func_data)
+      }
     }
   }
 }
@@ -56,17 +100,9 @@ impl Compile for Exp {
 impl Compile for AddExp {
   fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
     match self {
-      AddExp::MulExp(mul_exp) => mul_exp.compile(bb, func_data),
-      AddExp::AOMExp(add_exp, add_op, mul_exp) => {
-        let expr1 = add_exp.compile(bb, func_data);
-        let expr2 = mul_exp.compile(bb, func_data);
-        let op = match add_op {
-          AddOp::Add => BinaryOp::Add,
-          AddOp::Sub => BinaryOp::Sub,
-        };
-        let val = func_data.dfg_mut().new_value().binary(op, expr1, expr2);
-        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(val).unwrap();
-        val
+      AddExp::Single(mul_exp) => mul_exp.compile(bb, func_data),
+      AddExp::Binary(binary) => {
+        binary.compile(bb, func_data)
       }
     }
   }
@@ -75,21 +111,65 @@ impl Compile for AddExp {
 impl Compile for MulExp {
   fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
     match self {
-      MulExp::UnaryExp(unary_exp) => unary_exp.compile(bb, func_data),
-      MulExp::MOUExp(mul_exp, mul_op, unary_exp) => {
-        let expr1 = mul_exp.compile(bb, func_data);
-        let expr2 = unary_exp.compile(bb, func_data);
-        let op = match mul_op {
-          MulOp::Mul => BinaryOp::Mul,
-          MulOp::Div => BinaryOp::Div,
-          MulOp::Mod => BinaryOp::Mod,
-        };
-        let val = func_data.dfg_mut().new_value().binary(op, expr1, expr2);
-        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(val).unwrap();
-        val
+      MulExp::Single(unary_exp) => unary_exp.compile(bb, func_data),
+      MulExp::Binary(binary) => {
+        binary.compile(bb, func_data)
       }
     }
   } 
+}
+
+impl<T, S> Compile for Binary<T, S> 
+where T: Compile, S: Compile {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
+    let lhs = self.lhs.compile(bb, func_data);
+    let rhs = self.rhs.compile(bb, func_data);
+    match self.op {
+      // 未执行短路操作
+      BinOp::LOr => {
+        let zero = func_data.dfg_mut().new_value().integer(0);
+        let l0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, lhs, zero);
+        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(l0).unwrap();
+        let r0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, rhs, zero);
+        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(r0).unwrap();
+        let not_or = func_data.dfg_mut().new_value().binary(BinaryOp::And, l0, r0);
+        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(not_or).unwrap();
+        let or = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, not_or, zero);
+        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(or).unwrap();
+        return or
+      },
+      BinOp::LAnd => {
+        let zero = func_data.dfg_mut().new_value().integer(0);
+        let l0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, lhs, zero);
+        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(l0).unwrap();
+        let r0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, rhs, zero);
+        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(r0).unwrap();
+        let not_and = func_data.dfg_mut().new_value().binary(BinaryOp::Or, l0, r0);
+        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(not_and).unwrap();
+        let and  = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, not_and, zero);
+        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(and).unwrap();
+        return and
+      },
+      _ => {}
+    }
+    let op = match self.op {
+      BinOp::Add => BinaryOp::Add,
+      BinOp::Sub => BinaryOp::Sub,
+      BinOp::Mul => BinaryOp::Mul,
+      BinOp::Div => BinaryOp::Div,
+      BinOp::Mod => BinaryOp::Mod,
+      BinOp::LT => BinaryOp::Lt,
+      BinOp::GT => BinaryOp::Gt,
+      BinOp::LE => BinaryOp::Le,
+      BinOp::GE => BinaryOp::Ge,
+      BinOp::Eq => BinaryOp::Eq,
+      BinOp::NEq => BinaryOp::NotEq,
+      _ => unreachable!("Logical operators should be handled separately"),
+    };
+    let bin_op = func_data.dfg_mut().new_value().binary(op, lhs, rhs);
+    func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(bin_op).unwrap();
+    bin_op
+  }
 }
 
 pub fn ast2ir(ast: &CompUnit) -> Program {
@@ -127,37 +207,86 @@ pub fn ast2ir(ast: &CompUnit) -> Program {
 #[allow(dead_code)]
 fn calc_exp(exp: &Exp) -> i32 {
   match exp {
-    Exp::AddExp(add_exp) => calc_add_exp(add_exp),
+    Exp::LOrExp(lor_exp) => calc_lor_exp(lor_exp),
+  }
+}
+
+fn calc_lor_exp(lor_exp: &LOrExp) -> i32 {
+  match lor_exp {
+    LOrExp::Single(land_exp) => calc_land_exp(land_exp),
+    LOrExp::Binary(binary) => {
+      calc_binary(binary)
+    }
+  }
+}
+
+fn calc_land_exp(land_exp: &LAndExp) -> i32 {
+  match land_exp {
+    LAndExp::Single(eq_exp) => calc_eq_exp(eq_exp),
+    LAndExp::Binary(binary) => {
+      calc_binary(binary)
+    }
+  }
+}
+
+fn calc_eq_exp(eq_exp: &EqExp) -> i32 {
+  match eq_exp {
+    EqExp::Single(rel_exp) => calc_rel_exp(rel_exp),
+    EqExp::Binary(binary) => {
+      calc_binary(binary)
+    }
+  }
+}
+
+fn calc_rel_exp(rel_exp: &RelExp) -> i32 {
+  match rel_exp {
+    RelExp::Single(add_exp) => calc_add_exp(add_exp),
+    RelExp::Binary(binary) => {
+      calc_binary(binary)
+    }
   }
 }
 
 fn calc_add_exp(add_exp: &AddExp) -> i32 {
   match add_exp {
-    AddExp::MulExp(mul_exp) => calc_mul_exp(mul_exp),
-    AddExp::AOMExp(add_exp, add_op, mul_exp) => {
-      let val1 = calc_add_exp(add_exp);
-      let val2 = calc_mul_exp(mul_exp);
-      match add_op {
-        AddOp::Add => val1 + val2,
-        AddOp::Sub => val1 - val2,
-      }
+    AddExp::Single(mul_exp) => calc_mul_exp(mul_exp),
+    AddExp::Binary(binary) => {
+      calc_binary(binary)
     }
   }
 }
 
 fn calc_mul_exp(mul_exp: &MulExp) -> i32 {
   match mul_exp {
-    MulExp::UnaryExp(unary_exp) => calc_unary_exp(unary_exp),
-    MulExp::MOUExp(mul_exp, mul_op, unary_exp) => {
-      let val1 = calc_mul_exp(mul_exp);
-      let val2 = calc_unary_exp(unary_exp);
-      match mul_op {
-        MulOp::Mul => val1 * val2,
-        MulOp::Div => val1 / val2,
-        MulOp::Mod => val1 % val2,
-      }
+    MulExp::Single(unary_exp) => calc_unary_exp(unary_exp),
+    MulExp::Binary(binary) => {
+      calc_binary(binary)
     }
   }
+}
+
+fn calc_binary<T, S>(binary: &Binary<T, S>) -> i32
+where
+    T: Compile, S: Compile,
+{
+    unimplemented!("Binary expression evaluation is not implemented yet");
+    // let lhs = calc_exp(&binary.lhs);
+    // let rhs = calc_exp(&binary.rhs);
+    // match binary.op {
+    //   BinOp::Add => lhs + rhs,
+    //   BinOp::Sub => lhs - rhs,
+    //   BinOp::Mul => lhs * rhs,
+    //   BinOp::Div => lhs / rhs,
+    //   BinOp::Mod => lhs % rhs,
+    //   BinOp::LT => (lhs < rhs) as i32,
+    //   BinOp::GT => (lhs > rhs) as i32,
+    //   BinOp::LE => (lhs <= rhs) as i32,
+    //   BinOp::GE => (lhs >= rhs) as i32,
+    //   BinOp::Eq => (lhs == rhs) as i32,
+    //   BinOp::NEq => (lhs != rhs) as i32,
+    //   BinOp::And => (lhs != 0 && rhs != 0) as i32,
+    //   BinOp::Or => (lhs != 0 || rhs != 0) as i32,
+    // }
 }
 
 fn calc_unary_exp(unary_exp: &UnaryExp) -> i32 {
