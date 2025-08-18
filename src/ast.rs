@@ -28,7 +28,32 @@ pub enum Stmt {
 
 #[derive(Debug, Clone)]
 pub enum Exp {
-    Single(UnaryExp),
+    AddExp(AddExp),
+}
+
+#[derive(Debug, Clone)]
+pub enum AddExp {
+    MulExp(MulExp),
+    AOMExp(Box<AddExp>, AddOp, Box<MulExp>),
+}
+
+#[derive(Debug, Clone)]
+pub enum AddOp {
+    Add,
+    Sub,
+}
+
+#[derive(Debug, Clone)]
+pub enum MulExp {
+    UnaryExp(UnaryExp),
+    MOUExp(Box<MulExp>, MulOp, Box<UnaryExp>),
+}
+
+#[derive(Debug, Clone)]
+pub enum MulOp {
+    Mul,
+    Div,
+    Mod,
 }
 
 #[derive(Debug, Clone)]

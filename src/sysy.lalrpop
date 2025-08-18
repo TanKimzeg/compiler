@@ -26,7 +26,30 @@ Block: Block = "{" <stmt: Stmt> "}" => Block { <> };
 
 Stmt: Stmt = "return" <exp: Exp> ";" => Stmt::Ret(<>);
 
-Exp: Exp = <unary_exp: UnaryExp> => Exp::Single(<>);
+Exp: Exp = <add_exp: AddExp> => Exp::AddExp(<>);
+
+AddExp: AddExp = {
+  <mul_exp: MulExp> => AddExp::MulExp(<>),
+  <add_exp: AddExp> <add_op: AddOp> <mul_exp: MulExp> =>
+    AddExp::AOMExp(Box::new(add_exp), add_op, Box::new(mul_exp))
+};
+
+AddOp: AddOp = {
+  "+" => AddOp::Add,
+  "-" => AddOp::Sub,
+};
+
+MulExp: MulExp = {
+  <unary_exp: UnaryExp> => MulExp::UnaryExp(<>),
+  <mul_exp: MulExp> <mul_op: MulOp> <unary_exp: UnaryExp> => 
+    MulExp::MOUExp(Box::new(mul_exp), mul_op, Box::new(unary_exp))
+};
+
+MulOp: MulOp = {
+  "*" => MulOp::Mul,
+  "/" => MulOp::Div,
+  "%" => MulOp::Mod,
+};
 
 UnaryExp: UnaryExp = {
   <pexp: PrimaryExp> => UnaryExp::PExp(<>),

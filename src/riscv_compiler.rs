@@ -159,6 +159,18 @@ impl ValueKindExt for values::Binary {
         asm_text.push_str(format!("\tseqz {}, {}\n", 
                           target_reg.to_string(), target_reg).as_str());
       },
+      BinaryOp::Mul => {
+        asm_text.push_str(format!("\tmul {}, {}, {}\n", 
+                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+      },
+      BinaryOp::Div => {
+        asm_text.push_str(format!("\tdiv {}, {}, {}\n", 
+                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+      },
+      BinaryOp::Mod => {
+        asm_text.push_str(format!("\trem {}, {}, {}\n", 
+                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+      },
       _ => unimplemented!("{}", format!("Unsupported binary operation: {:?}", op)),
 
     }

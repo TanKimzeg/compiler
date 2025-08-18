@@ -48,9 +48,48 @@ impl Compile for PrimaryExp {
 impl Compile for Exp {
   fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
     match self {
-      Exp::Single(unary_exp) => unary_exp.compile(bb, func_data),
+      Exp::AddExp(add_exp) => add_exp.compile(bb, func_data),
     }
   }
+}
+
+impl Compile for AddExp {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
+    match self {
+      AddExp::MulExp(mul_exp) => mul_exp.compile(bb, func_data),
+      AddExp::AOMExp(add_exp, add_op, mul_exp) => {
+        let expr1 = add_exp.compile(bb, func_data);
+        let expr2 = mul_exp.compile(bb, func_data);
+        let op = match add_op {
+          AddOp::Add => BinaryOp::Add,
+          AddOp::Sub => BinaryOp::Sub,
+        };
+        let val = func_data.dfg_mut().new_value().binary(op, expr1, expr2);
+        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(val).unwrap();
+        val
+      }
+    }
+  }
+}
+
+impl Compile for MulExp {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData) -> Value {
+    match self {
+      MulExp::UnaryExp(unary_exp) => unary_exp.compile(bb, func_data),
+      MulExp::MOUExp(mul_exp, mul_op, unary_exp) => {
+        let expr1 = mul_exp.compile(bb, func_data);
+        let expr2 = unary_exp.compile(bb, func_data);
+        let op = match mul_op {
+          MulOp::Mul => BinaryOp::Mul,
+          MulOp::Div => BinaryOp::Div,
+          MulOp::Mod => BinaryOp::Mod,
+        };
+        let val = func_data.dfg_mut().new_value().binary(op, expr1, expr2);
+        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(val).unwrap();
+        val
+      }
+    }
+  } 
 }
 
 pub fn ast2ir(ast: &CompUnit) -> Program {
@@ -87,8 +126,37 @@ pub fn ast2ir(ast: &CompUnit) -> Program {
 
 #[allow(dead_code)]
 fn calc_exp(exp: &Exp) -> i32 {
-  match &exp {
-    Exp::Single(unary_exp) => calc_unary_exp(unary_exp),
+  match exp {
+    Exp::AddExp(add_exp) => calc_add_exp(add_exp),
+  }
+}
+
+fn calc_add_exp(add_exp: &AddExp) -> i32 {
+  match add_exp {
+    AddExp::MulExp(mul_exp) => calc_mul_exp(mul_exp),
+    AddExp::AOMExp(add_exp, add_op, mul_exp) => {
+      let val1 = calc_add_exp(add_exp);
+      let val2 = calc_mul_exp(mul_exp);
+      match add_op {
+        AddOp::Add => val1 + val2,
+        AddOp::Sub => val1 - val2,
+      }
+    }
+  }
+}
+
+fn calc_mul_exp(mul_exp: &MulExp) -> i32 {
+  match mul_exp {
+    MulExp::UnaryExp(unary_exp) => calc_unary_exp(unary_exp),
+    MulExp::MOUExp(mul_exp, mul_op, unary_exp) => {
+      let val1 = calc_mul_exp(mul_exp);
+      let val2 = calc_unary_exp(unary_exp);
+      match mul_op {
+        MulOp::Mul => val1 * val2,
+        MulOp::Div => val1 / val2,
+        MulOp::Mod => val1 % val2,
+      }
+    }
   }
 }
 
@@ -96,7 +164,7 @@ fn calc_unary_exp(unary_exp: &UnaryExp) -> i32 {
   match unary_exp {
     UnaryExp::PExp(pe) => calc_pexp(pe),
     UnaryExp::OpExp(op, ue) => {
-      let val = calc_exp(&Exp::Single(*ue.clone()));
+      let val = calc_unary_exp(ue);
       match op {
         UnaryOP::Plus => val,
         UnaryOP::Minus => -val,
