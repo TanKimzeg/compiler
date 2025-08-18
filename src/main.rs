@@ -23,7 +23,6 @@ fn main() -> Result<()> {
 
   // 调用 lalrpop 生成的 parser 解析输入文件
   let ast: CompUnit = sysy::CompUnitParser::new().parse(&input).unwrap();
-  println!("{:#?}", ast);
 
   let program = ast2ir(&ast);
 

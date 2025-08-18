@@ -24,18 +24,18 @@ FuncType: FuncType = "int" => FuncType::Int;
 
 Block: Block = "{" <stmt: Stmt> "}" => Block { <> };
 
-Stmt: Stmt = "return" <exp: Exp> ";" => Stmt { <> };
+Stmt: Stmt = "return" <exp: Exp> ";" => Stmt::Ret(<>);
 
-Exp: Exp = <unary_exp: UnaryExp> => Exp{ <> };
+Exp: Exp = <unary_exp: UnaryExp> => Exp::Single(<>);
 
 UnaryExp: UnaryExp = {
-  <pexp: PrimaryExp> => UnaryExp::new_pexp(<>),
-  <u_op: UnaryOP> <u_exp: UnaryExp> => UnaryExp::new_opexp(u_op, u_exp),
+  <pexp: PrimaryExp> => UnaryExp::PExp(<>),
+  <u_op: UnaryOP> <u_exp: UnaryExp> => UnaryExp::OpExp(u_op, Box::new(u_exp)),
 };
 
 PrimaryExp: PrimaryExp = {
-  "(" <exp: Exp> ")" => PrimaryExp::new_exp(exp),
-  <num: Number> => PrimaryExp::new_num(num),
+  "(" <exp: Exp> ")" => PrimaryExp::Exp(Box::new(exp)),
+  <num: Number> => PrimaryExp::Number(num),
 };
 
 Number: i32 = <num: IntConst> => <>;
