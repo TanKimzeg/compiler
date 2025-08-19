@@ -205,107 +205,120 @@ pub fn ast2ir(ast: &CompUnit) -> Program {
 }
 
 #[allow(dead_code)]
-fn calc_exp(exp: &Exp) -> i32 {
-  match exp {
-    Exp::LOrExp(lor_exp) => calc_lor_exp(lor_exp),
-  }
+trait Calc {
+  fn calc(&self) -> i32;
 }
 
-fn calc_lor_exp(lor_exp: &LOrExp) -> i32 {
-  match lor_exp {
-    LOrExp::Single(land_exp) => calc_land_exp(land_exp),
-    LOrExp::Binary(binary) => {
-      calc_binary(binary)
+impl Calc for Exp {
+  fn calc(&self) -> i32 {
+    match self {
+      Exp::LOrExp(lor_exp) => lor_exp.calc(),
     }
   }
 }
 
-fn calc_land_exp(land_exp: &LAndExp) -> i32 {
-  match land_exp {
-    LAndExp::Single(eq_exp) => calc_eq_exp(eq_exp),
-    LAndExp::Binary(binary) => {
-      calc_binary(binary)
+impl Calc for LOrExp {
+  fn calc(&self) -> i32 {
+    match self {
+      LOrExp::Single(land_exp) => land_exp.calc(),
+      LOrExp::Binary(binary) => 
+        binary.calc()
+    }
+  } 
+}
+
+impl Calc for LAndExp {
+  fn calc(&self) -> i32 {
+    match self {
+      LAndExp::Single(eq_exp) => eq_exp.calc(),
+      LAndExp::Binary(binary) => 
+        binary.calc()
+    }
+  }
+}
+impl Calc for EqExp {
+  fn calc(&self) -> i32 {
+    match self {
+      EqExp::Single(rel_exp) => rel_exp.calc(),
+      EqExp::Binary(binary) => 
+        binary.calc()
     }
   }
 }
 
-fn calc_eq_exp(eq_exp: &EqExp) -> i32 {
-  match eq_exp {
-    EqExp::Single(rel_exp) => calc_rel_exp(rel_exp),
-    EqExp::Binary(binary) => {
-      calc_binary(binary)
+impl Calc for RelExp {
+  fn calc(&self) -> i32 {
+    match self {
+      RelExp::Single(add_exp) => add_exp.calc(),
+      RelExp::Binary(binary) => 
+        binary.calc()
     }
   }
 }
 
-fn calc_rel_exp(rel_exp: &RelExp) -> i32 {
-  match rel_exp {
-    RelExp::Single(add_exp) => calc_add_exp(add_exp),
-    RelExp::Binary(binary) => {
-      calc_binary(binary)
+impl Calc for AddExp {
+  fn calc(&self) -> i32 {
+    match self {
+      AddExp::Single(mul_exp) => mul_exp.calc(),
+      AddExp::Binary(binary) => 
+        binary.calc()
     }
-  }
+  } 
 }
 
-fn calc_add_exp(add_exp: &AddExp) -> i32 {
-  match add_exp {
-    AddExp::Single(mul_exp) => calc_mul_exp(mul_exp),
-    AddExp::Binary(binary) => {
-      calc_binary(binary)
+impl Calc for MulExp {
+  fn calc(&self) -> i32 {
+    match self {
+      MulExp::Single(unary_exp) => unary_exp.calc(),
+      MulExp::Binary(binary) => 
+        binary.calc()
     }
-  }
+  } 
 }
 
-fn calc_mul_exp(mul_exp: &MulExp) -> i32 {
-  match mul_exp {
-    MulExp::Single(unary_exp) => calc_unary_exp(unary_exp),
-    MulExp::Binary(binary) => {
-      calc_binary(binary)
-    }
-  }
-}
-
-fn calc_binary<T, S>(binary: &Binary<T, S>) -> i32
-where
-    T: Compile, S: Compile,
-{
-    unimplemented!("Binary expression evaluation is not implemented yet");
-    // let lhs = calc_exp(&binary.lhs);
-    // let rhs = calc_exp(&binary.rhs);
-    // match binary.op {
-    //   BinOp::Add => lhs + rhs,
-    //   BinOp::Sub => lhs - rhs,
-    //   BinOp::Mul => lhs * rhs,
-    //   BinOp::Div => lhs / rhs,
-    //   BinOp::Mod => lhs % rhs,
-    //   BinOp::LT => (lhs < rhs) as i32,
-    //   BinOp::GT => (lhs > rhs) as i32,
-    //   BinOp::LE => (lhs <= rhs) as i32,
-    //   BinOp::GE => (lhs >= rhs) as i32,
-    //   BinOp::Eq => (lhs == rhs) as i32,
-    //   BinOp::NEq => (lhs != rhs) as i32,
-    //   BinOp::And => (lhs != 0 && rhs != 0) as i32,
-    //   BinOp::Or => (lhs != 0 || rhs != 0) as i32,
-    // }
-}
-
-fn calc_unary_exp(unary_exp: &UnaryExp) -> i32 {
-  match unary_exp {
-    UnaryExp::PExp(pe) => calc_pexp(pe),
-    UnaryExp::OpExp(op, ue) => {
-      let val = calc_unary_exp(ue);
-      match op {
-        UnaryOP::Plus => val,
-        UnaryOP::Minus => -val,
-        UnaryOP::Not => (val == 0) as i32,
+impl Calc for UnaryExp {
+  fn calc(&self) -> i32 {
+    match self {
+      UnaryExp::PExp(pexp) => pexp.calc(),
+      UnaryExp::OpExp(op, exp) => {
+        let val = exp.calc();
+        match op {
+          UnaryOP::Plus => val,
+          UnaryOP::Minus => -val,
+          UnaryOP::Not => (val == 0) as i32,
+        }
       }
     }
   }
 }
 
-fn calc_pexp(pexp: &PrimaryExp) -> i32 {
-  match pexp {
-    PrimaryExp::Exp(exp) => calc_exp(exp),
-    PrimaryExp::Number(num) => *num,
+impl Calc for PrimaryExp {
+  fn calc(&self) -> i32 {
+    match self {
+      PrimaryExp::Exp(exp) => exp.calc(),
+      PrimaryExp::Number(num) => *num,
+    }
+  }
+}
+
+impl<T, S> Calc for Binary<T, S>
+where T: Calc, S: Calc {
+  fn calc(&self) -> i32 {
+      let lhs = self.lhs.calc();
+      let rhs = self.rhs.calc();
+      match self.op {
+        BinOp::Add => lhs + rhs,
+        BinOp::Sub => lhs - rhs,
+        BinOp::Mul => lhs * rhs,
+        BinOp::Div => lhs / rhs,
+        BinOp::Mod => lhs % rhs,
+        BinOp::LT => (lhs < rhs) as i32,
+        BinOp::GT => (lhs > rhs) as i32,
+        BinOp::LE => (lhs <= rhs) as i32,
+        BinOp::GE => (lhs >= rhs) as i32,
+        BinOp::Eq => (lhs == rhs) as i32,
+        BinOp::NEq => (lhs != rhs) as i32,
+        _ => unimplemented!("Logical operators should be handled separately"),
+      }
   }
 }

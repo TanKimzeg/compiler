@@ -8,6 +8,5 @@ pub fn koopa_text(program: Program) -> String {
 
   // 将生成的 IR 写入输出文件
   let text_form_ir = str::from_utf8(&generator.writer()).unwrap().to_string();
-  println!("{}", text_form_ir);
   text_form_ir
 }

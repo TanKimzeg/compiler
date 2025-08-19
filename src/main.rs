@@ -43,5 +43,6 @@ fn main() -> Result<()> {
       panic!();
     }
   };
+  println!("{}", text);
   std::fs::write(output, text)
 }

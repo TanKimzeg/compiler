@@ -9,7 +9,6 @@ pub struct FuncDef {
     pub block: Block,
 }
 
-#[derive(Debug)]
 pub enum FuncType {
     Int,
 }
@@ -22,8 +21,6 @@ pub enum Stmt {
     Ret(Exp),
 }
 
-trait Executable { }
-
 pub enum Exp {
     LOrExp(LOrExp),
 }
@@ -33,34 +30,29 @@ pub enum LOrExp {
     // OAExp(Box<LOrExp>, Box<LAndExp>),
     Binary(Box<Binary<LOrExp, LAndExp>>),
 }
-impl Executable for LOrExp {}
 
 pub enum LAndExp {
     Single(EqExp),
     Binary(Box<Binary<LAndExp, EqExp>>),
 }
-impl Executable for LAndExp {}
 
 
 pub enum EqExp {
     Single(RelExp),
     Binary(Box<Binary<EqExp, RelExp>>),
 }
-impl Executable for EqExp {}
 
 pub enum RelExp {
     Single(AddExp),
     // ROAExp(Box<RelExp>, RelOp, Box<AddExp>),
     Binary(Box<Binary<RelExp, AddExp>>),
 }
-impl Executable for RelExp {}
 
 pub enum AddExp {
     Single(MulExp),
     // AOMExp(Box<AddExp>, AddOp, Box<MulExp>),
     Binary(Box<Binary<AddExp, MulExp>>),
 }
-impl Executable for AddExp {}
 
 pub enum BinOp {
     Add, Sub,
@@ -75,7 +67,6 @@ pub enum MulExp {
     // MOUExp(Box<MulExp>, MulOp, Box<UnaryExp>),
     Binary(Box<Binary<MulExp, UnaryExp>>),
 }
-impl Executable for MulExp {}
 
 pub struct Binary<T, S> {
     pub lhs: Box<T>,
@@ -94,7 +85,6 @@ pub enum PrimaryExp {
     Number(i32),
 }
 
-#[derive(Debug,Clone)]
 pub enum UnaryOP {
     Plus,
     Minus,
