@@ -29,7 +29,10 @@ BlockItem: BlockItem = {
   <decl: Decl> => BlockItem::Decl(<>),
 };
 
-Stmt: Stmt = "return" <exp: Exp> ";" => Stmt::Ret(<>);
+Stmt: Stmt = {
+  "return" <exp: Exp> ";" => Stmt::Ret(<>),
+  <id: Ident> "=" <exp: Exp> ";" => Stmt::LVal(<>),
+};
 
 // ---------------------- Exp ------------------------
 Exp: Exp = <add_exp: LOrExp> => Exp::LOrExp(<>);
@@ -133,15 +136,13 @@ UnaryOP: UnaryOP = {
 
 // ---------------------- Decl -------------------------
 Decl: Decl = {
-  <const_decl: ConstDecl> => Decl::ConstDecl(<>),
+  ConstDecl => Decl::ConstDecl(<>),
+  VarDecl => Decl::VarDecl(<>),
 };
 
 ConstDecl: ConstDecl = {
   "const" <ty: BType> <defs: Comma<ConstDef>> ";" =>
-    ConstDecl {
-      ty: ty,
-      defs: defs,
-    }
+    ConstDecl { <> },
 };
 
 BType: BType = {
@@ -154,6 +155,20 @@ ConstDef: ConstDef = {
 
 ConstInit: ConstInit = {
   Exp => ConstInit::ConstExp(<>),
+};
+
+VarDecl: VarDecl = {
+  <ty: BType> <defs: Comma<VarDef>> ";" => 
+    VarDecl { <> },
+};
+
+VarDef: VarDef = {
+  <id: Ident> => VarDef{ id: id, init: None },
+  <id: Ident> "=" <init: VarInit> => VarDef{ id, init: Some(init) },
+};
+
+VarInit: VarInit = {
+  Exp => VarInit::VarExp(<>),
 };
 
 Comma<T>: Vec<T> = {

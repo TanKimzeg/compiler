@@ -1,5 +1,8 @@
 use koopa::ir::*;
 use koopa::ir::builder::{LocalInstBuilder, ValueBuilder};
+use crate::ast::SymbolTable;
+use crate::ast::IdentInfo;
+
 
 pub enum Exp {
     LOrExp(LOrExp),
@@ -69,8 +72,6 @@ pub enum UnaryOP {
 }
 
 // ----------------------- trait Compile -----------------------
-use std::collections::HashMap;
-type SymbolTable = HashMap<String, i32>;
 pub trait Compile {
     /// 将表达式编译入函数的块中, 并返回生成的值, 为语句执行下一步
     fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value;
@@ -111,8 +112,18 @@ impl Compile for PrimaryExp {
                func_data.dfg_mut().new_value().integer(*num)
            },
            PrimaryExp::LVal(id) => {
-            if let Some(&val) = st.get(id) {
-                func_data.dfg_mut().new_value().integer(val)
+            if let Some(info) = st.get(id) {
+                match info {
+                  IdentInfo::Const(val) => {
+                    func_data.dfg_mut().new_value().integer(*val)
+                  }
+                  IdentInfo::Var(var_info) => {
+                    // 变量值是一个指针, 需要加载
+                    let load = func_data.dfg_mut().new_value().load(var_info.dest);
+                    func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(load).unwrap();
+                    load
+                  }
+                }
             } else {
                 panic!("Symbol '{}' not found in symbol table", id);
             }
@@ -344,8 +355,12 @@ impl Calc for PrimaryExp {
       PrimaryExp::Exp(exp) => exp.calc(st),
       PrimaryExp::Number(num) => *num,
       PrimaryExp::LVal(id) => {
-        if let Some(&val) = st.get(id) {
-            val
+        if let Some(val) = st.get(id) {
+          if let IdentInfo::Const(v) = val {
+            *v
+          } else {
+            panic!("Expected a constant value for identifier '{}'", id);
+          }
         } else {
             panic!("Symbol '{}' not found in symbol table", id);
         }
