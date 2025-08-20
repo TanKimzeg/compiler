@@ -22,10 +22,16 @@ FuncDef: FuncDef = {
 
 FuncType: FuncType = "int" => FuncType::Int;
 
-Block: Block = "{" <stmt: Stmt> "}" => Block { <> };
+Block: Block = "{" <items: BlockItem*> "}" => Block::new(items);
+
+BlockItem: BlockItem = {
+  <stmt: Stmt> => BlockItem::Stmt(<>),
+  <decl: Decl> => BlockItem::Decl(<>),
+};
 
 Stmt: Stmt = "return" <exp: Exp> ";" => Stmt::Ret(<>);
 
+// ---------------------- Exp ------------------------
 Exp: Exp = <add_exp: LOrExp> => Exp::LOrExp(<>);
 
 LOrExp: LOrExp = {
@@ -112,6 +118,7 @@ UnaryExp: UnaryExp = {
 PrimaryExp: PrimaryExp = {
   "(" <exp: Exp> ")" => PrimaryExp::Exp(Box::new(exp)),
   <num: Number> => PrimaryExp::Number(num),
+  Ident => PrimaryExp::LVal(<>),
 };
 
 Number: i32 = <num: IntConst> => <>;
@@ -121,10 +128,47 @@ UnaryOP: UnaryOP = {
   "-" => UnaryOP::Minus,
   "!" => UnaryOP::Not,
 };
+// ---------------------- Exp ------------------------
+
+
+// ---------------------- Decl -------------------------
+Decl: Decl = {
+  <const_decl: ConstDecl> => Decl::ConstDecl(<>),
+};
+
+ConstDecl: ConstDecl = {
+  "const" <ty: BType> <defs: Comma<ConstDef>> ";" =>
+    ConstDecl {
+      ty: ty,
+      defs: defs,
+    }
+};
+
+BType: BType = {
+  "int" => BType::Int,
+};
+
+ConstDef: ConstDef = {
+  <id: Ident> "=" <init: ConstInit> => ConstDef{ <> },
+};
+
+ConstInit: ConstInit = {
+  Exp => ConstInit::ConstExp(<>),
+};
+
+Comma<T>: Vec<T> = {
+  <v: (<T> ",")*> <e: T?> => match e {
+    None => v,
+    Some(e) => {
+      let mut v = v;
+      v.push(e);
+      v
+    }
+  }
+};
+// ---------------------- Decl -------------------------
 
 // 如果匹配到标识符, 就返回这个字符串
-// 一对尖括号在此处指代的是正则表达式匹配到的字符串 (&str)
-// 关于尖括号到底代表什么, 请 RTFM
 Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();
 
 // 对整数字面量的处理方式: 把匹配到的字符串按对应进制转换成数字

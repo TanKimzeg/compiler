@@ -22,9 +22,9 @@ fn main() -> Result<()> {
   let input = read_to_string(input)?;
 
   // 调用 lalrpop 生成的 parser 解析输入文件
-  let ast: CompUnit = sysy::CompUnitParser::new().parse(&input).unwrap();
+  let mut ast: CompUnit = sysy::CompUnitParser::new().parse(&input).unwrap();
 
-  let program = ast2ir(&ast);
+  let program = ast2ir(&mut ast);
 
   // 根据 mode 选择不同的处理方式
   let text = match mode.as_str() {
