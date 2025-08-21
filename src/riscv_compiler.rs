@@ -1,221 +1,307 @@
 use std::{collections::HashMap, fmt::Display};
 
-use koopa::ir::{entities::ValueData, values, *};
+use koopa::ir::{ values, *};
 
-trait CodeGen {
-    fn to_riscv(&self, func_data: &FunctionData, regs: &mut RegAllocator) -> String;
+struct Context<'a> {
+  pub func_data: &'a FunctionData,
+  pub offset: HashMap<Value, u32>,
+  pub stack_size: u32,
+  pub inst: Option<Value>,
 }
 
+impl<'a> Context<'a> {
+  pub fn new(func_data: &'a FunctionData) -> Self {
+    let (stack_size, offset) = Context::stack_alloc(func_data);
+    Self {
+      func_data,
+      offset: offset,
+      stack_size,
+      inst: None,
+    }
+  }
+  fn stack_alloc(func_data: &FunctionData) -> (u32, HashMap<Value, u32>) {
+    let mut size = 0;
+    let mut offset = HashMap::new();
+    for (&_bb, node) in func_data.layout().bbs() {
+      for &inst in node.insts().keys() {
+        let val_data = func_data.dfg().value(inst);
+        let ty = val_data.ty();
+        if !ty.is_unit() {
+          let type_kind = ty.kind();
+          match type_kind {
+            TypeKind::Int32 => { offset.insert(inst, size); size += 4;},
+            TypeKind::Pointer(_) => { offset.insert(inst, size);size += 4; },
+            _ => unimplemented!("Unsupported type for stack allocation: {}", type_kind.to_string()),
+          }
+        }
+      }
+    }
+    ((size + 15) / 16 * 16, offset)
+  }
+  pub fn get_offset(&self, val: Value) -> u32 {
+    *self.offset.get(&val).expect(
+      format!("Value {:?} not found in offset map", val).as_str()
+    )
+  }
+  /// `addi sp, sp, 立即数`要求立即数的范围是$[-2048,2047]$,
+  /// 对于超过这个范围的立即数,我将其存放在`t0`寄存器中,
+  /// 然后使用`sub sp, sp, t0`来完成栈指令的调整.
+  /// 如果立即数在范围内,则直接使用`addi sp, sp, 立即数`指令.
+  /// 在执行 `prologue` 时,函数未开始执行,所以`t0`寄存器没有被占用.
+  fn prologue(&self) -> String{
+    let mut asm_text = String::new();
+    let stack_size = self.stack_size;
+    if stack_size > 2048 {
+      asm_text.push_str(format!("\tli t0, {}\n", stack_size).as_str());
+      asm_text.push_str("\tsub sp, sp, t0\n");
+    } else {
+      asm_text.push_str(format!("\taddi sp, sp, -{}\n", stack_size).as_str());
+    }
+    asm_text
+  }
+
+  /// `addi sp, sp, 立即数`要求立即数的范围是$[-2048,2047]$,
+  /// 对于超过这个范围的立即数,我将其存放在`t0`寄存器中,
+  /// 然后使用`add sp, sp, t0`来完成栈指令的调整.
+  /// 如果立即数在范围内,则直接使用`addi sp, sp, 立即数`指令.
+  /// 在执行 `epilogue` 时,函数已经执行完毕,所以`t0`寄存器没有被占用.
+  fn epilogue(&self) -> String {
+    let mut asm_text = String::new();
+    let stack_size = self.stack_size;
+    if stack_size > 2047 {
+      asm_text.push_str(format!("\tli t0, {}\n", stack_size).as_str());
+      asm_text.push_str("\tadd sp, sp, t0\n");
+    } else {
+      asm_text.push_str(format!("\taddi sp, sp, {}\n", stack_size).as_str());
+    }
+    asm_text.push_str("\tret\n");
+    asm_text
+  }
+
+}
+
+trait CodeGen {
+    fn to_riscv(&self, context: &mut Context) -> String;
+}
+
+/// 执行完一种 `ValueKind` 的指令后, 返回存放最终结果的寄存器和生成的汇编代码
 trait ValueKindExt {
-    fn to_riscv(&self, func_data: &FunctionData, prev_reg: Option<Reg>, 
-                regs: &mut RegAllocator) -> (Reg, String);
+    fn to_riscv(&self, context: &mut Context) -> String;
 }
 
 pub fn riscv_text(program: Program) -> String {
   let mut asm_text = String::new();
   asm_text.push_str("\t.text\n\t.globl main\n");
-  let mut regs = RegAllocator::new();
 
   for &func in program.func_layout() {
     let func_data = program.func(func);
     asm_text.push_str(format!("{}:\n", &func_data.name()[1..]).as_str());
+    let mut context = Context::new(func_data);
+    // 函数的 prologue
+    asm_text.push_str(context.prologue().as_str());
     for (&_bb, node) in func_data.layout().bbs() {
         
       for &inst in node.insts().keys() {
-
         let val_data = func_data.dfg().value(inst);
-        match val_data.kind() {
-          // 目标代码生成本身递归, 
-          // 而指令的 ID 会按照顺序存放在基本块的指令 layout 中,
-          // 因此只匹配 Return 指令, 在 Return 指令中会递归展开执行
-          ValueKind::Return(..) => asm_text.push_str(
-            &val_data.kind().to_riscv(func_data, &mut regs)
-          ),
-          _ => { }
-        }
+        let val_kind = val_data.kind();
+        context.inst = Some(inst);
+        asm_text.push_str(val_kind.to_riscv(&mut context).as_str());
       }
     }
+    // 函数的 epilogue
+    asm_text.push_str(context.epilogue().as_str());
   }
   asm_text
 }
 
-fn parse_value(val_data: &ValueData, func_data: &FunctionData) -> Option<i32> {
-    match val_data.kind() {
-        ValueKind::Integer(i) => Some(i.value()),
-        ValueKind::Return(ret) => {
-            if let Some(rv) = ret.value() {
-                let rv_data = func_data.dfg().value(rv);
-                parse_value(rv_data, func_data)
-            } else {
-                None
-            }
-        },
-        _ => unimplemented!(),
-    }
-}
-
 
 impl CodeGen for ValueKind {
-  fn to_riscv(&self, func_data: &FunctionData, regs: &mut RegAllocator) -> String {
+  fn to_riscv(&self, context: &mut Context) -> String {
       let mut  asm_text = String::new();
-      let (_reg, lines) = match self {
+      let lines = match self {
         ValueKind::Return(ret) => {
-          ret.to_riscv(&func_data, None, regs)
+          ret.to_riscv(context)
         },
         ValueKind::Binary(bin) => {
-          bin.to_riscv(&func_data, None, regs)
-        }
-        _ => { unreachable!("{}",format!("Unsupported expr: {:?}", self)) }
-      };
+          bin.to_riscv(context)
+        },
+        ValueKind::Alloc(..) => { String::new() }, // 分配内存不需要生成代码
+        ValueKind::Load(load) => {
+          load.to_riscv(context)
+        },
+        ValueKind::Store(store) => {
+          store.to_riscv(context)
+        },
+        _ => { unimplemented!("{}",format!("Unsupported expr: {:?}", self)) }
+      }; 
       asm_text.push_str(lines.as_str());
       asm_text
   } 
 }
 impl ValueKindExt for values::Return {
-  fn to_riscv(&self, func_data: &FunctionData, prev_reg: Option<Reg>, 
-              regs: &mut RegAllocator) -> (Reg, String) {
+  fn to_riscv(&self, context: &mut Context) -> String {
     let mut asm_text = String::new();
-    if let Some(rv) = self.value() {
-      let rv_data = func_data.dfg().value(rv);
+    match self.value() {
+    Some(rv) => {
+      let rv_data = context.func_data.dfg().value(rv);
       match rv_data.kind() {
         ValueKind::Integer(i) => {
-          let line = format!("\tli a0, {}\n", i.value());
-          asm_text.push_str(&line);
+          asm_text.push_str(format!("\tli {}, {}\n", Reg::A0.to_string(), i.value()).as_str());
         },
-        ValueKind::Binary(bin) => {
-          let (reg, lines) = bin.to_riscv(func_data, prev_reg, regs);
-          asm_text.push_str(lines.as_str());
-          if reg != Reg::A0 {
-            asm_text.push_str(format!("\tmv a0, {}\n", reg).as_str());
-            regs.free(reg);
-          }
+        _ => {
+          asm_text.push_str(format!("\tlw {}, {}(sp)\n", Reg::A0.to_string(), context.get_offset(rv)).as_str());
         }
-        _ => unimplemented!("{}", format!("Unsupported return value type: {:?}", rv_data.kind())),
       }
+    },
+    None => {
+      asm_text.push_str(format!("\tli {}, {}\n", Reg::A0.to_string(), Reg::Zero).as_str());
     }
-    asm_text.push_str("\tret\n");
-    (Reg::A0, asm_text)
+    }
+    asm_text
   }
 }
 impl ValueKindExt for values::Binary {
-  fn to_riscv(&self, func_data: &FunctionData, prev_res: Option<Reg>, 
-              regs: &mut RegAllocator) -> (Reg, String) {
+  /// 我约定: lhs存放在`t1`寄存器中, rhs存放在`t2`寄存器中,
+  /// 最终结果存放在`t0`寄存器中.
+  fn to_riscv(&self, context: &mut Context) -> String {
     let mut asm_text = String::new();
     let op = self.op();
-    let lhs_data = func_data.dfg().value(self.lhs());
-    let rhs_data = func_data.dfg().value(self.rhs());
-    
-    let lhs_val = match lhs_data.kind() {
+    let lhs_data = context.func_data.dfg().value(self.lhs());
+    let rhs_data = context.func_data.dfg().value(self.rhs());
+    let target_reg = Reg::T0;
+    let lhs_reg = Reg::T1;
+    let rhs_reg = Reg::T2;
+    match lhs_data.kind() {
       ValueKind::Integer(i) => {
-        match i.value() {
-          0 => Reg::Zero,
-          _ => {
-            let reg = regs.allocate().expect("No available registers");
-            asm_text.push_str(format!("\tli {}, {}\n", reg, i.value()).as_str());
-            reg
-          }
-        }
+        asm_text.push_str(format!("\tli {}, {}\n", 
+        lhs_reg.to_string(), i.value()).as_str());
       },
-      ValueKind::Binary(bin) => {
-        let (reg, lines) = bin.to_riscv(func_data, prev_res, regs);
-        asm_text.push_str(lines.as_str());
-        reg
-      },
-      _ => unimplemented!("{}", format!("Unsupported left-hand side type: {:?}", lhs_data.kind())),
-    };
-    let rhs_val = match rhs_data.kind() {
+      _ => {
+        asm_text.push_str(format!("\tlw {}, {}(sp)\n", 
+        lhs_reg.to_string(), context.get_offset(self.lhs())).as_str());
+      }
+    }
+    match rhs_data.kind() {
       ValueKind::Integer(i) => {
-        match i.value() {
-          0 => {
-            Reg::Zero
-          },
-          _ => {
-            let reg = regs.allocate().expect("No available registers");
-            asm_text.push_str(format!("\tli {}, {}\n", reg, i.value()).as_str());
-            reg
-          }
-        }
+        asm_text.push_str(format!("\tli {}, {}\n", 
+        rhs_reg.to_string(), i.value()).as_str());
       },
-      ValueKind::Binary(bin) => {
-        let (reg, lines) = bin.to_riscv(func_data, Some(Reg::T1), regs);
-        asm_text.push_str(lines.as_str());
-        reg
-      },
-      _ => unimplemented!("{}", format!("Unsupported right-hand side type: {:?}", rhs_data.kind())),
-    };
-    let target_reg = prev_res.unwrap_or_else(|| regs.allocate().expect("No available registers"));
+      _ => {
+        asm_text.push_str(format!("\tlw {}, {}(sp)\n", 
+        rhs_reg.to_string(), context.get_offset(self.rhs())).as_str());
+      }
+    }
     match op {
       BinaryOp::Add => {
         asm_text.push_str(format!("\tadd {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
       },
       BinaryOp::Sub => {
         asm_text.push_str(format!("\tsub {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
       },
       BinaryOp::Eq => {
         asm_text.push_str(format!("\txor {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
         asm_text.push_str(format!("\tseqz {}, {}\n", 
                           target_reg.to_string(), target_reg).as_str());
       },
       BinaryOp::Mul => {
         asm_text.push_str(format!("\tmul {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
       },
       BinaryOp::Div => {
         asm_text.push_str(format!("\tdiv {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
       },
       BinaryOp::Mod => {
         asm_text.push_str(format!("\trem {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
       },
       BinaryOp::Or => {
         asm_text.push_str(format!("\tor {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
       },
       BinaryOp::And => {
         asm_text.push_str(format!("\tand {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
       },
       BinaryOp::NotEq => {
         asm_text.push_str(format!("\txor {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
         asm_text.push_str(format!("\tsnez {}, {}\n", 
                           target_reg.to_string(), target_reg).as_str());
       },
       BinaryOp::Lt => {
         asm_text.push_str(format!("\tslt {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
       },
       BinaryOp::Le => {
         asm_text.push_str(format!("\tsgt {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
         asm_text.push_str(format!("\tseqz {}, {}\n", 
                           target_reg.to_string(), target_reg).as_str());
       },
       BinaryOp::Gt => {
         asm_text.push_str(format!("\tsgt {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
       },
       BinaryOp::Ge => {
         asm_text.push_str(format!("\tslt {}, {}, {}\n", 
-                          target_reg.to_string(), lhs_val, rhs_val).as_str());
+                          target_reg.to_string(), lhs_reg, rhs_reg).as_str());
         asm_text.push_str(format!("\tseqz {}, {}\n", 
                           target_reg.to_string(), target_reg).as_str());
       },
       _ => unimplemented!("{}", format!("Unsupported binary operation: {:?}", op)),
 
     }
-    if lhs_val != Reg::Zero && lhs_val != target_reg {
-      regs.free(lhs_val);
-    }
-    if rhs_val != Reg::Zero && rhs_val != target_reg {
-      regs.free(rhs_val);
-    }
-    (target_reg, asm_text)
+    asm_text.push_str(format!("\tsw {}, {}(sp)\n", 
+                          target_reg.to_string(), context.get_offset(context.inst.unwrap())).as_str());
+    asm_text
   }
+}
+impl ValueKindExt for values::Integer {
+  /// 将整数值存放在 `t0`寄存器中.
+  fn to_riscv(&self, context: &mut Context) -> String {
+    let mut asm_text = String::new();
+    match self.value() {
+      0 => {
+        asm_text.push_str(format!("\tli {}, {}\n", Reg::T0.to_string(), Reg::Zero).as_str());
+      },
+      _ => {
+        asm_text.push_str(format!("\tli {}, {}\n", Reg::T0.to_string(), self.value()).as_str());
+      }
+    }
+    asm_text
+}
+}
+impl ValueKindExt for values::Load {
+  fn to_riscv(&self, context: &mut Context) -> String {
+    let mut asm_text = String::new();
+    asm_text.push_str(format!("\tlw {}, {}(sp)\n", Reg::T0.to_string(), 
+                      context.get_offset(self.src())).as_str());
+    asm_text.push_str(format!("\tsw {}, {}(sp)\n", Reg::T0.to_string(), 
+                      context.get_offset(context.inst.unwrap())).as_str());
+    asm_text
+  }
+}
+impl ValueKindExt for values::Store {
+  fn to_riscv(&self, context: &mut Context) -> String {
+    let mut asm_text = String::new();
+    let val_data = context.func_data.dfg().value(self.value());
+    match val_data.kind() {
+      ValueKind::Integer(i) => {
+        asm_text.push_str(format!("\tli {}, {}\n", Reg::T0.to_string(), i.value()).as_str());
+      },
+      _ => {
+        asm_text.push_str(format!("\tlw {}, {}(sp)\n", Reg::T0.to_string(), 
+                              context.get_offset(self.value())).as_str());
+      }
+    }
+    asm_text.push_str(format!("\tsw {}, {}(sp)\n", 
+                          Reg::T0.to_string(), context.get_offset(self.dest())).as_str());
+    asm_text
+  }    
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -239,6 +325,7 @@ impl Display for Reg {
    } 
 }
 
+#[allow(dead_code)]
 impl Reg {
   pub fn from_str(s: &str) -> Self {
     match s {
@@ -254,9 +341,11 @@ impl Reg {
 }
 
 type RegsUsed = HashMap<Reg, bool>;
+#[allow(dead_code)]
 struct RegAllocator {
     regs_used: RegsUsed,
 }
+#[allow(dead_code)]
 impl RegAllocator {
   pub fn new() -> Self {
     let mut regs_used = RegsUsed::new();
