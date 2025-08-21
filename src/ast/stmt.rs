@@ -1,6 +1,9 @@
-use crate::ast::exp::*;
+use crate::ast::Exp;
+use crate::ast::Block;
 
 pub enum Stmt {
-    Ret(Exp),
+    Ret(Option<Exp>),
     LVal(String, Exp),
+    Block(Block),
+    Exp(Option<Exp>),
 }

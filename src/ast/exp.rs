@@ -1,6 +1,7 @@
+use std::rc::Rc;
 use koopa::ir::*;
 use koopa::ir::builder::{LocalInstBuilder, ValueBuilder};
-use crate::ast::SymbolTable;
+use crate::ast::{Symbols, SymbolsExt};
 use crate::ast::IdentInfo;
 
 
@@ -74,11 +75,11 @@ pub enum UnaryOP {
 // ----------------------- trait Compile -----------------------
 pub trait Compile {
     /// 将表达式编译入函数的块中, 并返回生成的值, 为语句执行下一步
-    fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value;
+    fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value;
 }
 
 impl Compile for UnaryExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       UnaryExp::OpExp(op, exp) => {
         let val = exp.compile(bb, func_data, st);
@@ -104,7 +105,7 @@ impl Compile for UnaryExp {
 }
 
 impl Compile for PrimaryExp {
-   fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value {
+   fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
        match self {
            PrimaryExp::Exp(exp) => exp.compile(bb, func_data, st),
            PrimaryExp::Number(num) => {
@@ -113,7 +114,7 @@ impl Compile for PrimaryExp {
            },
            PrimaryExp::LVal(id) => {
             if let Some(info) = st.get(id) {
-                match info {
+                match info.as_ref() {
                   IdentInfo::Const(val) => {
                     func_data.dfg_mut().new_value().integer(*val)
                   }
@@ -133,7 +134,7 @@ impl Compile for PrimaryExp {
 }
 
 impl Compile for Exp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       Exp::LOrExp(lor_exp) => lor_exp.compile(bb, func_data, st),
     }
@@ -141,7 +142,7 @@ impl Compile for Exp {
 }
 
 impl Compile for LOrExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
       match self {
         LOrExp::Single(land_exp) => land_exp.compile(bb, func_data, st),
         LOrExp::Binary(binary) => {
@@ -152,7 +153,7 @@ impl Compile for LOrExp {
 }
 
 impl Compile for LAndExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
       match self {
         LAndExp::Single(eq_exp) => eq_exp.compile(bb, func_data, st),
         LAndExp::Binary(binary) => {
@@ -163,7 +164,7 @@ impl Compile for LAndExp {
 }
 
 impl Compile for EqExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       EqExp::Single(rel_exp) => rel_exp.compile(bb, func_data, st),
       EqExp::Binary(binary) => {
@@ -174,7 +175,7 @@ impl Compile for EqExp {
 }
 
 impl Compile for RelExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       RelExp::Single(add_exp) => add_exp.compile(bb, func_data,st),
       RelExp::Binary(binary) => {
@@ -185,7 +186,7 @@ impl Compile for RelExp {
 }
 
 impl Compile for AddExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       AddExp::Single(mul_exp) => mul_exp.compile(bb, func_data,st),
       AddExp::Binary(binary) => {
@@ -196,7 +197,7 @@ impl Compile for AddExp {
 }
 
 impl Compile for MulExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value {
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       MulExp::Single(unary_exp) => unary_exp.compile(bb, func_data, st),
       MulExp::Binary(binary) => {
@@ -208,9 +209,9 @@ impl Compile for MulExp {
 
 impl<T, S> Compile for Binary<T, S> 
 where T: Compile, S: Compile {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: &SymbolTable) -> Value {
-    let lhs = self.lhs.compile(bb, func_data, st);
-    let rhs = self.rhs.compile(bb, func_data, st);
+  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+    let lhs = self.lhs.compile(bb, func_data, Rc::clone(&st));
+    let rhs = self.rhs.compile(bb, func_data, Rc::clone(&st));
     match self.op {
       // 未执行短路操作
       BinOp::LOr => {
@@ -263,11 +264,11 @@ where T: Compile, S: Compile {
 // ----------------------- trait Calc -----------------------
 /// Trait for calculating the value of an expression.
 pub trait Calc {
-  fn calc(&self, st: &SymbolTable) -> i32;
+  fn calc(&self, st: &Symbols) -> i32;
 }
 
 impl Calc for Exp {
-  fn calc(&self, st: &SymbolTable) -> i32 {
+  fn calc(&self, st: &Symbols) -> i32 {
     match self {
       Exp::LOrExp(lor_exp) => lor_exp.calc(st),
     }
@@ -275,7 +276,7 @@ impl Calc for Exp {
 }
 
 impl Calc for LOrExp {
-  fn calc(&self, st: &SymbolTable) -> i32 {
+  fn calc(&self, st: &Symbols) -> i32 {
     match self {
       LOrExp::Single(land_exp) => land_exp.calc(st),
       LOrExp::Binary(binary) => 
@@ -285,7 +286,7 @@ impl Calc for LOrExp {
 }
 
 impl Calc for LAndExp {
-  fn calc(&self, st: &SymbolTable) -> i32 {
+  fn calc(&self, st: &Symbols) -> i32 {
     match self {
       LAndExp::Single(eq_exp) => eq_exp.calc(st),
       LAndExp::Binary(binary) => 
@@ -294,7 +295,7 @@ impl Calc for LAndExp {
   }
 }
 impl Calc for EqExp {
-  fn calc(&self, st: &SymbolTable) -> i32 {
+  fn calc(&self, st: &Symbols) -> i32 {
     match self {
       EqExp::Single(rel_exp) => rel_exp.calc(st),
       EqExp::Binary(binary) => 
@@ -304,7 +305,7 @@ impl Calc for EqExp {
 }
 
 impl Calc for RelExp {
-  fn calc(&self, st: &SymbolTable) -> i32 {
+  fn calc(&self, st: &Symbols) -> i32 {
     match self {
       RelExp::Single(add_exp) => add_exp.calc(st),
       RelExp::Binary(binary) => 
@@ -314,7 +315,7 @@ impl Calc for RelExp {
 }
 
 impl Calc for AddExp {
-  fn calc(&self, st: &SymbolTable) -> i32 {
+  fn calc(&self, st: &Symbols) -> i32 {
     match self {
       AddExp::Single(mul_exp) => mul_exp.calc(st),
       AddExp::Binary(binary) => 
@@ -324,7 +325,7 @@ impl Calc for AddExp {
 }
 
 impl Calc for MulExp {
-  fn calc(&self, st: &SymbolTable) -> i32 {
+  fn calc(&self, st: &Symbols) -> i32 {
     match self {
       MulExp::Single(unary_exp) => unary_exp.calc(st),
       MulExp::Binary(binary) => 
@@ -334,7 +335,7 @@ impl Calc for MulExp {
 }
 
 impl Calc for UnaryExp {
-  fn calc(&self, st: &SymbolTable) -> i32 {
+  fn calc(&self, st: &Symbols) -> i32 {
     match self {
       UnaryExp::PExp(pexp) => pexp.calc(st),
       UnaryExp::OpExp(op, exp) => {
@@ -350,13 +351,13 @@ impl Calc for UnaryExp {
 }
 
 impl Calc for PrimaryExp {
-  fn calc(&self, st: &SymbolTable) -> i32 {
+  fn calc(&self, st: &Symbols) -> i32 {
     match self {
       PrimaryExp::Exp(exp) => exp.calc(st),
       PrimaryExp::Number(num) => *num,
       PrimaryExp::LVal(id) => {
         if let Some(val) = st.get(id) {
-          if let IdentInfo::Const(v) = val {
+          if let IdentInfo::Const(v) = val.as_ref() {
             *v
           } else {
             panic!("Expected a constant value for identifier '{}'", id);
@@ -371,7 +372,7 @@ impl Calc for PrimaryExp {
 
 impl<T, S> Calc for Binary<T, S>
 where T: Calc, S: Calc {
-  fn calc(&self, st: &SymbolTable) -> i32 {
+  fn calc(&self, st: &Symbols) -> i32 {
       let lhs = self.lhs.calc(st);
       let rhs = self.rhs.calc(st);
       match self.op {

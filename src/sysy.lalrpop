@@ -30,8 +30,10 @@ BlockItem: BlockItem = {
 };
 
 Stmt: Stmt = {
-  "return" <exp: Exp> ";" => Stmt::Ret(<>),
+  "return" <exp: Exp?> ";" => Stmt::Ret(<>),
   <id: Ident> "=" <exp: Exp> ";" => Stmt::LVal(<>),
+  Block => Stmt::Block(<>),
+  <exp: Exp?> ";" => Stmt::Exp(<>),
 };
 
 // ---------------------- Exp ------------------------

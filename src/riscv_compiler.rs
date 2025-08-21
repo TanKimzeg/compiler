@@ -262,7 +262,7 @@ impl ValueKindExt for values::Binary {
 }
 impl ValueKindExt for values::Integer {
   /// 将整数值存放在 `t0`寄存器中.
-  fn to_riscv(&self, context: &mut Context) -> String {
+  fn to_riscv(&self, _context: &mut Context) -> String {
     let mut asm_text = String::new();
     match self.value() {
       0 => {
