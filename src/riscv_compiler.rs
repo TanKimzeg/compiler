@@ -99,23 +99,35 @@ pub fn riscv_text(program: Program) -> String {
     let mut context = Context::new(func_data);
     // 函数的 prologue
     asm_text.push_str(context.prologue().as_str());
-    for (&_bb, node) in func_data.layout().bbs() {
-        
-      for &inst in node.insts().keys() {
-        let val_data = func_data.dfg().value(inst);
-        let val_kind = val_data.kind();
-        context.inst = Some(inst);
-        asm_text.push_str(val_kind.to_riscv(&mut context).as_str());
-      }
+    for (&bb, _node) in func_data.layout().bbs() {
+      asm_text.push_str(bb.to_riscv(&mut context).as_str());
     }
-    // 函数的 epilogue
-    asm_text.push_str(context.epilogue().as_str());
   }
   asm_text
 }
+impl CodeGen for BasicBlock {
+  fn to_riscv(&self, context: &mut Context) -> String {
+    let mut asm_text = String::new();
+    let node = context.func_data.layout().bbs()
+      .node(self)
+      .expect(format!("BasicBlock {:?} not found in layout", self).as_str());
+    asm_text.push_str(format!("{}:\n", context.func_data.dfg()
+      .bb(*self)
+      .name().as_deref()
+      .expect(format!("BasicBlock {:?} has no name", self).as_str())
+      .strip_prefix('%').unwrap()
+    ).as_str());
+    for &inst in node.insts().keys() {
+      let val_data = context.func_data.dfg().value(inst);
+      let val_kind = val_data.kind();
+      context.inst = Some(inst);
+      asm_text.push_str(val_kind.to_riscv(context).as_str());
+    }
+    asm_text
+  }
+}
 
-
-impl CodeGen for ValueKind {
+impl ValueKindExt for ValueKind {
   fn to_riscv(&self, context: &mut Context) -> String {
       let mut  asm_text = String::new();
       let lines = match self {
@@ -132,6 +144,12 @@ impl CodeGen for ValueKind {
         ValueKind::Store(store) => {
           store.to_riscv(context)
         },
+        ValueKind::Branch(br) => {
+          br.to_riscv(context)
+        },
+        ValueKind::Jump(j) => {
+          j.to_riscv(context)
+        }
         _ => { unimplemented!("{}",format!("Unsupported expr: {:?}", self)) }
       }; 
       asm_text.push_str(lines.as_str());
@@ -154,9 +172,11 @@ impl ValueKindExt for values::Return {
       }
     },
     None => {
-      asm_text.push_str(format!("\tli {}, {}\n", Reg::A0.to_string(), Reg::Zero).as_str());
+      asm_text.push_str(format!("\tli {}, {}\n", Reg::A0.to_string(), 0).as_str());
     }
     }
+    // 函数的 epilogue
+    asm_text.push_str(context.epilogue().as_str());
     asm_text
   }
 }
@@ -266,7 +286,7 @@ impl ValueKindExt for values::Integer {
     let mut asm_text = String::new();
     match self.value() {
       0 => {
-        asm_text.push_str(format!("\tli {}, {}\n", Reg::T0.to_string(), Reg::Zero).as_str());
+        asm_text.push_str(format!("\tli {}, {}\n", Reg::T0.to_string(), 0).as_str());
       },
       _ => {
         asm_text.push_str(format!("\tli {}, {}\n", Reg::T0.to_string(), self.value()).as_str());
@@ -298,10 +318,52 @@ impl ValueKindExt for values::Store {
                               context.get_offset(self.value())).as_str());
       }
     }
-    asm_text.push_str(format!("\tsw {}, {}(sp)\n", 
-                          Reg::T0.to_string(), context.get_offset(self.dest())).as_str());
+    asm_text.push_str(format!("\tsw {}, {}(sp)\n", Reg::T0.to_string(), 
+                          context.get_offset(self.dest())).as_str());
     asm_text
   }    
+}
+impl ValueKindExt for values::Branch {
+  fn to_riscv(&self, context: &mut Context) -> String {
+    let mut asm_text = String::new();
+    let cond_data = context.func_data.dfg().value(self.cond());
+    match cond_data.kind() {
+      ValueKind::Integer(i) => {
+        asm_text.push_str(format!("\tli {}, {}\n", Reg::T0.to_string(), i.value()).as_str());
+      },
+      _ => {
+        asm_text.push_str(format!("\tlw {}, {}(sp)\n", Reg::T0.to_string(), 
+                              context.get_offset(self.cond())).as_str());
+      }
+    }
+    let then_bb_name = context.func_data.dfg().bb(self.true_bb())
+                      .name().as_deref()
+                      .expect(format!("BasicBlock {:?} has no name", self.true_bb()).as_str())
+                      .strip_prefix('%').unwrap();
+
+    asm_text.push_str(format!("\tbnez {}, {}\n", Reg::T0.to_string(), then_bb_name).as_str());
+    let else_bb_name = context.func_data.dfg().bb(self.false_bb())
+                      .name().as_deref()
+                      .expect(format!("BasicBlock {:?} has no name", self.false_bb()).as_str())
+                      .strip_prefix('%').unwrap();
+    asm_text.push_str(format!("\tj {}\n", else_bb_name).as_str());
+    
+    // asm_text.push_str(self.true_bb().to_riscv(context).as_str());
+    // asm_text.push_str(self.false_bb().to_riscv(context).as_str());
+    asm_text
+  }
+}
+impl ValueKindExt for values::Jump {
+  fn to_riscv(&self, context: &mut Context) -> String {
+    let mut asm_text = String::new();
+    let target_bb_name = context.func_data.dfg().bb(self.target())
+                      .name().as_deref()
+                      .expect(format!("BasicBlock {:?} has no name", self.target()).as_str())
+                      .strip_prefix('%').unwrap();
+    asm_text.push_str(format!("\tj {}\n", target_bb_name).as_str());
+    // asm_text.push_str(self.target().to_riscv(context).as_str());
+    asm_text
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
