@@ -6,4 +6,5 @@ pub enum Stmt {
     LVal(String, Exp),
     Block(Block),
     Exp(Option<Exp>),
+    Cond(Exp, Box<Stmt>, Option<Box<Stmt>>),
 }
