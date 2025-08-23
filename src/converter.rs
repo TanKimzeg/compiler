@@ -5,7 +5,7 @@ use koopa::ir::*;
 
 pub fn ast2ir(ast: &mut Module) -> Program {
   let mut program = Program::new();
-  let global_st = ast.build_symbols();
+  let global_st = ast.build_symbols(&mut program);
 
   for unit in &mut ast.units {
     match unit {
@@ -17,23 +17,35 @@ pub fn ast2ir(ast: &mut Module) -> Program {
   program
 }
 
-fn traverse_func(program: &mut Program,func_def: &mut FuncDef, global_st: &Symbols) {
-  let func = program.new_func(FunctionData::with_param_names(
-    format!("@{}", func_def.id),
-    Vec::new(),
-    Type::get_i32(),
-  ));
+fn traverse_func(program: &mut Program, func_def: &mut FuncDef, global_st: &Symbols) {
+  let info = global_st.borrow_mut().get(func_def.id.as_str())
+  .expect(format!("Function '{}' not found in symbol table", func_def.id).as_str());
+  let IdentInfo::Func(func) = info.as_ref() else {
+    panic!("Identifier '{}' is not a function", func_def.id);
+  };
+  let func_data = program.func_mut(*func);
 
-  let func_data = program.func_mut(func);
   // entry basic block
   let entry = func_data.dfg_mut().new_bb().basic_block(Some("%entry".into()));
   func_data.layout_mut().bbs_mut().extend([entry]);
-
   let block = &mut func_def.block;
+  block.symbols.with_parent(Rc::clone(global_st));
+  let params = func_data.params().to_vec();
+  assert_eq!(params.len(), func_def.params.len());
+  for (i, arg) in params.iter().enumerate() {
+    let slot = func_data.dfg_mut().new_value().alloc(func_def.params[i].1.clone());
+    func_data.layout_mut().bb_mut(entry).insts_mut().push_key_back(slot).unwrap();
+    let store = func_data.dfg_mut().new_value().store(*arg, slot);
+    func_data.layout_mut().bb_mut(entry).insts_mut().push_key_back(store).unwrap();
+    block.symbols.borrow_mut().insert(
+      func_def.params[i].0.clone(), 
+      Rc::new(IdentInfo::Var(slot)),
+    );
+  }
   let mut ctx = Context {
     bb: entry,
     func_data,
-    symbols: Rc::clone(global_st),
+    symbols: Rc::clone(&block.symbols),
     while_ctx: Vec::new(),
   };
   let ret_bb = traverse_block(block, &mut ctx);
@@ -77,7 +89,7 @@ fn traverse_block(block: &mut Block, c: &mut Context) -> BasicBlock {
               None => {
                 c.symbols.borrow_mut().insert(
                   id.clone(),
-                  Rc::new(IdentInfo::Var(VarInfo { dest: new_var })),
+                  Rc::new(IdentInfo::Var(new_var )),
                 );
               },
               Some(VarInit::VarExp(exp)) => {
@@ -86,7 +98,7 @@ fn traverse_block(block: &mut Block, c: &mut Context) -> BasicBlock {
                 c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
                 c.symbols.borrow_mut().insert(
                   id.clone(),
-                  Rc::new(IdentInfo::Var(VarInfo { dest: new_var })),
+                  Rc::new(IdentInfo::Var(new_var)),
                 );
               }
             }
@@ -113,8 +125,8 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
     },
     Stmt::LVal(id, exp) => {
       let val = exp.compile(&mut c.bb, c.func_data, Rc::clone(&c.symbols));
-      if let Some(IdentInfo::Var(var_info)) = c.symbols.borrow().get(id).as_deref() {
-        let store = c.func_data.dfg_mut().new_value().store(val, var_info.dest);
+      if let Some(IdentInfo::Var(var)) = c.symbols.borrow().get(id).as_deref() {
+        let store = c.func_data.dfg_mut().new_value().store(val, *var);
         c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
       } else {
         panic!("Variable '{}' not found in symbol table", id);
