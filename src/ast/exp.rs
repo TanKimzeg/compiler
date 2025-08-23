@@ -101,6 +101,18 @@ impl Compile for UnaryExp {
         }
       }
       UnaryExp::PExp(pexp) => pexp.compile(bb, func_data, st),
+      UnaryExp::FuncCall(id, args) => {
+        let func_info = st.get(id).expect(format!("Function '{}' not found", id).as_str());
+        if let IdentInfo::Func(func) = func_info.as_ref() {
+          let arg_vals: Vec<Value> = args.iter().map(|arg| arg.compile(bb, func_data, Rc::clone(&st))).collect();
+          let call = func_data.dfg_mut().new_value().call(*func, arg_vals);
+          func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(call).unwrap();
+          call
+        } else {
+          panic!("Identifier '{}' is not a function", id);
+        }
+
+      }
     }
   }
 }
@@ -119,12 +131,13 @@ impl Compile for PrimaryExp {
                   IdentInfo::Const(val) => {
                     func_data.dfg_mut().new_value().integer(*val)
                   }
-                  IdentInfo::Var(var_info) => {
+                  IdentInfo::Var(var) => {
                     // 变量值是一个指针, 需要加载
-                    let load = func_data.dfg_mut().new_value().load(var_info.dest);
+                    let load = func_data.dfg_mut().new_value().load(*var);
                     func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(load).unwrap();
                     load
                   }
+                  _ => unreachable!("FuncInfo should not appear here"),
                 }
             } else {
                 panic!("Symbol '{}' not found in symbol table", id);
@@ -412,6 +425,9 @@ impl Calc for UnaryExp {
           UnaryOP::Minus => -val,
           UnaryOP::Not => (val == 0) as i32,
         }
+      },
+      UnaryExp::FuncCall(..) => {
+        unreachable!("Function calls are not supported in constant expressions");
       }
     }
   }

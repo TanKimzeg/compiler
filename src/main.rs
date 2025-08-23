@@ -22,7 +22,7 @@ fn main() -> Result<()> {
   let input = read_to_string(input)?;
 
   // 调用 lalrpop 生成的 parser 解析输入文件
-  let mut ast: CompUnit = sysy::CompUnitParser::new().parse(&input).unwrap();
+  let mut ast: Module = sysy::ModuleParser::new().parse(&input).unwrap();
 
   let program = ast2ir(&mut ast);
 

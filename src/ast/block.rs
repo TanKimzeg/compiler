@@ -2,11 +2,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
 
-use koopa::ir::Value;
+use koopa::ir::{ Value, Function };
 
 use crate::ast::stmt::*;
 use crate::ast::decl::*;
-use crate::ast::func::FuncInfo;
 
 pub type Symbols = Rc<RefCell<SymbolTable>>;
 pub trait SymbolsExt {
@@ -60,13 +59,10 @@ impl SymbolTable {
 
 pub enum IdentInfo {
 	Const(i32),
-	Var(VarInfo),
-	Func(FuncInfo),
+	Var(Value),
+	Func(Function),
 }
 
-pub struct VarInfo {
-	pub dest: Value,
-}
 pub struct Block {
 	pub items: Vec<BlockItem>,
 	pub symbols: Rc<RefCell<SymbolTable>>,

@@ -1,23 +1,31 @@
 use std::rc::Rc;
+use koopa::ir::{Program, FunctionData, Type};
+
 use crate::ast::block::*;
-use crate::ast::BType;
 
 
 pub struct Module {
 	pub units: Vec<CompUnit>,
 }
 impl Module {
-  pub fn build_symbols(&self) -> Symbols {
+  pub fn build_symbols(&self, program: &mut Program) -> Symbols {
     let st = SymbolTable::new();
     for unit in &self.units {
       match unit {
         CompUnit::Func(func_def) => {
+					let func = program.new_func(FunctionData::with_param_names(
+						format!("@{}", func_def.id),
+						func_def.params.iter().
+						map(|(id, ty)| {
+							let mut id = id.clone();
+							id.insert(0, '@');
+							(Some(id.to_string()), ty.clone())
+						}).collect(),
+						func_def.func_type.clone(),
+					));
           st.borrow_mut().insert(
             func_def.id.clone(), 
-            Rc::new(IdentInfo::Func(FuncInfo {
-              ret_type: func_def.func_type.clone(),
-              param_types: func_def.params.iter().map(|p| p.ty.clone()).collect(),
-            }))
+            Rc::new(IdentInfo::Func(func))
           );
         }
       }
@@ -31,24 +39,8 @@ pub enum CompUnit {
 }
 
 pub struct FuncDef {
-  pub func_type: FuncType,
+  pub func_type: Type,
   pub id: String,
-  pub params: Vec<FuncFParam>,
+  pub params: Vec<(String, Type)>,
   pub block: Block,
 }
-pub struct FuncInfo {
-  pub ret_type: FuncType,
-  pub param_types: Vec<BType>,
-}
-
-#[derive(Clone)]
-pub enum FuncType {
-  Int,
-  Void,
-}
-
-pub struct FuncFParam {
-  pub ty: BType,
-  pub id: String,
-}
-

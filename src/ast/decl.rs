@@ -1,3 +1,5 @@
+use koopa::ir::Type;
+
 use crate::ast::exp::Exp;
 
 
@@ -7,13 +9,8 @@ pub enum Decl {
 }
 
 pub struct ConstDecl {
-	pub ty: BType,
+	pub ty: Type,
 	pub defs: Vec<ConstDef>,
-}
-
-#[derive(Clone)]
-pub enum BType {
-	Int,
 }
 
 pub struct ConstDef {
@@ -26,7 +23,7 @@ pub enum ConstInit {
 }
 
 pub struct VarDecl {
-	pub ty: BType,
+	pub ty: Type,
 	pub defs: Vec<VarDef>,
 }
 
