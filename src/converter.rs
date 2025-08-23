@@ -22,6 +22,7 @@ pub fn ast2ir(ast: &mut CompUnit) -> Program {
         bb: entry,
         func_data,
         symbols: Rc::clone(&block.symbols),
+        while_ctx: Vec::new(),
     };
     let ret_bb = traverse_block(block, &mut ctx);
     let ret = func_data.dfg_mut().new_value().ret(None);
@@ -33,6 +34,12 @@ struct Context<'a> {
   bb: BasicBlock,
   func_data: &'a mut FunctionData,
   symbols: Symbols, 
+  while_ctx: Vec<WhileContext>,
+}
+#[derive(Clone)]
+struct WhileContext {
+  pub entry: BasicBlock,
+  pub end: BasicBlock,
 }
 
 fn traverse_block(block: &mut Block, c: &mut Context) -> BasicBlock {
@@ -109,6 +116,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
         bb: c.bb,
         func_data: c.func_data,
         symbols: Rc::clone(&inner_block.symbols),
+        while_ctx: c.while_ctx.clone(),
       };
       c.bb = traverse_block(inner_block, &mut child_ctx);
     },
@@ -125,7 +133,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
 
       // then 分支
       {
-        let mut then_ctx = Context { bb: then_bb, func_data: c.func_data, symbols: Rc::clone(&c.symbols) };
+        let mut then_ctx = Context { bb: then_bb, func_data: c.func_data, symbols: Rc::clone(&c.symbols) , while_ctx: c.while_ctx.clone()};
         let then_end_bb = process_stmt(then_b, &mut then_ctx);
         let jump = c.func_data.dfg_mut().new_value().jump(end_bb);
         c.func_data.layout_mut().bb_mut(then_end_bb).insts_mut().push_key_back(jump).unwrap();
@@ -137,7 +145,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
         let br = c.func_data.dfg_mut().new_value().branch(cond_val, then_bb, else_bb);
         c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
 
-        let mut else_ctx = Context { bb: else_bb, func_data: c.func_data, symbols: Rc::clone(&c.symbols) };
+        let mut else_ctx = Context { bb: else_bb, func_data: c.func_data, symbols: Rc::clone(&c.symbols), while_ctx: c.while_ctx.clone() };
         let else_end_bb = process_stmt(else_b, &mut else_ctx);
         let jump = c.func_data.dfg_mut().new_value().jump(end_bb);
         c.func_data.layout_mut().bb_mut(else_end_bb).insts_mut().push_key_back(jump).unwrap();
@@ -152,13 +160,14 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
       let while_entry_bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
       let while_body_bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
       let while_end_bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      c.while_ctx.push(WhileContext { entry: while_entry_bb, end: while_end_bb });
       c.func_data.layout_mut().bbs_mut().extend([while_entry_bb, while_body_bb, while_end_bb]);
       let jump = c.func_data.dfg_mut().new_value().jump(while_entry_bb);
       c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(jump).unwrap();
 
       // while entry bb
       {
-        let mut while_entry_bb = while_entry_bb; 
+        let mut while_entry_bb = while_entry_bb;
         // compile 方法会修改传入的 BasicBlock, 不能污染真正的 while 入口
         let cond_val = cond.compile(&mut while_entry_bb, c.func_data, Rc::clone(&c.symbols));
         let br = c.func_data.dfg_mut().new_value().branch(cond_val, while_body_bb, while_end_bb);
@@ -167,13 +176,29 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
 
       // while body bb
       {
-        let mut while_ctx = Context { bb: while_body_bb, func_data: c.func_data, symbols: Rc::clone(&c.symbols) };
+        let mut while_ctx = Context { bb: while_body_bb, func_data: c.func_data, symbols: Rc::clone(&c.symbols), while_ctx: c.while_ctx.clone() };
         let body_end_bb = process_stmt(stmt, &mut while_ctx);
         let jump = c.func_data.dfg_mut().new_value().jump(while_entry_bb);
         c.func_data.layout_mut().bb_mut(body_end_bb).insts_mut().push_key_back(jump).unwrap();
       }
-
+      c.while_ctx.pop();
       c.bb = while_end_bb;
+    },
+    Stmt::Break => {
+      let while_ctx = c.while_ctx.last().expect("break not in while");
+      let jump = c.func_data.dfg_mut().new_value().jump(while_ctx.end);
+      c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(jump).unwrap();
+      // unreachable block after break
+      c.bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      c.func_data.layout_mut().bbs_mut().push_key_back(c.bb).unwrap();
+    },
+    Stmt::Continue => {
+      let while_ctx = c.while_ctx.last().expect("continue not in while");
+      let jump = c.func_data.dfg_mut().new_value().jump(while_ctx.entry);
+      c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(jump).unwrap();
+      // unreachable block after continue
+      c.bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      c.func_data.layout_mut().bbs_mut().push_key_back(c.bb).unwrap();
     }
   }
   c.bb

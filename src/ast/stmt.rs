@@ -8,4 +8,6 @@ pub enum Stmt {
     Exp(Option<Exp>),
     Cond(Exp, Box<Stmt>, Option<Box<Stmt>>),
     While(Exp, Box<Stmt>),
+    Break,
+    Continue,
 }

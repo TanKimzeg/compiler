@@ -43,6 +43,8 @@ MatchedStmt: Stmt = {
     Stmt::Cond(exp, Box::new(then_m), Some(Box::new(else_m))),
   "while" "(" <exp: Exp> ")" <stmt: MatchedStmt> =>
     Stmt::While(exp, Box::new(stmt)),
+  "break" ";" => Stmt::Break,
+  "continue" ";" => Stmt::Continue,
 };
 
 UnmatchedStmt: Stmt = {
