@@ -1,6 +1,6 @@
 use std::rc::Rc;
 use koopa::ir::*;
-use koopa::ir::builder::{LocalInstBuilder, ValueBuilder};
+use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder, ValueBuilder};
 use crate::ast::{Symbols, SymbolsExt};
 use crate::ast::IdentInfo;
 
@@ -75,11 +75,11 @@ pub enum UnaryOP {
 // ----------------------- trait Compile -----------------------
 pub trait Compile {
     /// 将表达式编译入函数的块中, 并返回生成的值, 为语句执行下一步
-    fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value;
+    fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value;
 }
 
 impl Compile for UnaryExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       UnaryExp::OpExp(op, exp) => {
         let val = exp.compile(bb, func_data, st);
@@ -88,13 +88,13 @@ impl Compile for UnaryExp {
           UnaryOP::Minus => {
             let zero = func_data.dfg_mut().new_value().integer(0);
             let sub = func_data.dfg_mut().new_value().binary(BinaryOp::Sub, zero, val);
-            func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(sub).unwrap();
+            func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(sub).unwrap();
             sub
           },
           UnaryOP::Not => {
             let zero = func_data.dfg_mut().new_value().integer(0);
             let eq = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, val, zero);
-            func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(eq).unwrap();
+            func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(eq).unwrap();
             eq
           }
         }
@@ -105,7 +105,7 @@ impl Compile for UnaryExp {
 }
 
 impl Compile for PrimaryExp {
-   fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+   fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
        match self {
            PrimaryExp::Exp(exp) => exp.compile(bb, func_data, st),
            PrimaryExp::Number(num) => {
@@ -121,7 +121,7 @@ impl Compile for PrimaryExp {
                   IdentInfo::Var(var_info) => {
                     // 变量值是一个指针, 需要加载
                     let load = func_data.dfg_mut().new_value().load(var_info.dest);
-                    func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(load).unwrap();
+                    func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(load).unwrap();
                     load
                   }
                 }
@@ -134,7 +134,7 @@ impl Compile for PrimaryExp {
 }
 
 impl Compile for Exp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       Exp::LOrExp(lor_exp) => lor_exp.compile(bb, func_data, st),
     }
@@ -142,7 +142,7 @@ impl Compile for Exp {
 }
 
 impl Compile for LOrExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
       match self {
         LOrExp::Single(land_exp) => land_exp.compile(bb, func_data, st),
         LOrExp::Binary(binary) => {
@@ -153,7 +153,7 @@ impl Compile for LOrExp {
 }
 
 impl Compile for LAndExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
       match self {
         LAndExp::Single(eq_exp) => eq_exp.compile(bb, func_data, st),
         LAndExp::Binary(binary) => {
@@ -164,7 +164,7 @@ impl Compile for LAndExp {
 }
 
 impl Compile for EqExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       EqExp::Single(rel_exp) => rel_exp.compile(bb, func_data, st),
       EqExp::Binary(binary) => {
@@ -175,7 +175,7 @@ impl Compile for EqExp {
 }
 
 impl Compile for RelExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       RelExp::Single(add_exp) => add_exp.compile(bb, func_data,st),
       RelExp::Binary(binary) => {
@@ -186,7 +186,7 @@ impl Compile for RelExp {
 }
 
 impl Compile for AddExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       AddExp::Single(mul_exp) => mul_exp.compile(bb, func_data,st),
       AddExp::Binary(binary) => {
@@ -197,7 +197,7 @@ impl Compile for AddExp {
 }
 
 impl Compile for MulExp {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
     match self {
       MulExp::Single(unary_exp) => unary_exp.compile(bb, func_data, st),
       MulExp::Binary(binary) => {
@@ -209,34 +209,100 @@ impl Compile for MulExp {
 
 impl<T, S> Compile for Binary<T, S> 
 where T: Compile, S: Compile {
-  fn compile(&self, bb: BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+    use crate::converter::generate_bb_name;
     let lhs = self.lhs.compile(bb, func_data, Rc::clone(&st));
     let rhs = self.rhs.compile(bb, func_data, Rc::clone(&st));
     match self.op {
-      // 未执行短路操作
+      // 执行短路操作
       BinOp::LOr => {
+        // result = 1
+        // if (lhs == 0) {
+        //  result = (rhs != 0)
+        // }
+        let one = func_data.dfg_mut().new_value().integer(1);
+        let result = func_data.dfg_mut().new_value().alloc(Type::get_i32());
+        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(result).unwrap();
+        let store = func_data.dfg_mut().new_value().store(one, result);
+        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(store).unwrap();
+
         let zero = func_data.dfg_mut().new_value().integer(0);
         let l0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, lhs, zero);
-        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(l0).unwrap();
-        let r0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, rhs, zero);
-        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(r0).unwrap();
-        let not_or = func_data.dfg_mut().new_value().binary(BinaryOp::And, l0, r0);
-        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(not_or).unwrap();
-        let or = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, not_or, zero);
-        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(or).unwrap();
-        return or
+        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(l0).unwrap();
+        let then_bb = func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        let end_bb = func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        func_data.layout_mut().bbs_mut().extend([then_bb, end_bb]);
+        let br = func_data.dfg_mut().new_value().branch(l0, then_bb, end_bb);
+        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(br).unwrap();
+        // then 分支
+        {
+          let res = func_data.dfg_mut().new_value().binary(BinaryOp::NotEq, zero, rhs);
+          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(res).unwrap();
+          let store = func_data.dfg_mut().new_value().store(res, result);
+          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(store).unwrap();
+          
+          let jump = func_data.dfg_mut().new_value().jump(end_bb);
+          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(jump).unwrap();
+        }
+        *bb = end_bb;
+        let result = func_data.dfg_mut().new_value().load(result);
+        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(result).unwrap();
+        return result;
+        
+        // let zero = func_data.dfg_mut().new_value().integer(0);
+        // let l0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, lhs, zero);
+        // func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(l0).unwrap();
+        // let r0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, rhs, zero);
+        // func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(r0).unwrap();
+        // let not_or = func_data.dfg_mut().new_value().binary(BinaryOp::And, l0, r0);
+        // func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(not_or).unwrap();
+        // let or = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, not_or, zero);
+        // func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(or).unwrap();
+        // return or
       },
       BinOp::LAnd => {
+        // result = 0
+        // if (lhs != 0) {
+        //  result = (rhs != 0)
+        // }
         let zero = func_data.dfg_mut().new_value().integer(0);
-        let l0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, lhs, zero);
-        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(l0).unwrap();
-        let r0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, rhs, zero);
-        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(r0).unwrap();
-        let not_and = func_data.dfg_mut().new_value().binary(BinaryOp::Or, l0, r0);
-        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(not_and).unwrap();
-        let and  = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, not_and, zero);
-        func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(and).unwrap();
-        return and
+        let result = func_data.dfg_mut().new_value().alloc(Type::get_i32());
+        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(result).unwrap();
+        let store = func_data.dfg_mut().new_value().store(zero, result);
+        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(store).unwrap();
+
+        let l0 = func_data.dfg_mut().new_value().binary(BinaryOp::NotEq, lhs, zero);
+        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(l0).unwrap();
+        let then_bb = func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        let end_bb = func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        func_data.layout_mut().bbs_mut().extend([then_bb, end_bb]);
+        let br = func_data.dfg_mut().new_value().branch(l0, then_bb, end_bb);
+        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(br).unwrap();
+        // then 分支
+        {
+          let res = func_data.dfg_mut().new_value().binary(BinaryOp::NotEq, zero, rhs);
+          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(res).unwrap();
+          let store = func_data.dfg_mut().new_value().store(res, result);
+          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(store).unwrap();
+          
+          let jump = func_data.dfg_mut().new_value().jump(end_bb);
+          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(jump).unwrap();
+        }
+        *bb = end_bb;
+        let result = func_data.dfg_mut().new_value().load(result);
+        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(result).unwrap();
+        return result;
+
+        // let zero = func_data.dfg_mut().new_value().integer(0);
+        // let l0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, lhs, zero);
+        // func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(l0).unwrap();
+        // let r0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, rhs, zero);
+        // func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(r0).unwrap();
+        // let not_and = func_data.dfg_mut().new_value().binary(BinaryOp::Or, l0, r0);
+        // func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(not_and).unwrap();
+        // let and  = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, not_and, zero);
+        // func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(and).unwrap();
+        // return and
       },
       _ => {}
     }
@@ -255,7 +321,7 @@ where T: Compile, S: Compile {
       _ => unreachable!("Logical operators should be handled separately"),
     };
     let bin_op = func_data.dfg_mut().new_value().binary(op, lhs, rhs);
-    func_data.layout_mut().bb_mut(bb).insts_mut().push_key_back(bin_op).unwrap();
+    func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(bin_op).unwrap();
     bin_op
   }
 }

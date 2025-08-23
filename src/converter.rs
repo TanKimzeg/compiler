@@ -63,7 +63,7 @@ fn traverse_block(block: &mut Block, c: &mut Context) -> BasicBlock {
                 );
               },
               Some(VarInit::VarExp(exp)) => {
-                let val = exp.compile(c.bb, c.func_data, Rc::clone(&c.symbols));
+                let val = exp.compile(&mut c.bb, c.func_data, Rc::clone(&c.symbols));
                 let store = c.func_data.dfg_mut().new_value().store(val, new_var);
                 c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
                 c.symbols.borrow_mut().insert(
@@ -84,7 +84,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
   match stmt {
     Stmt::Ret(exp) => {
       let ret_val = match exp {
-        Some(exp) => Some(exp.compile(c.bb, c.func_data, Rc::clone(&c.symbols))),
+        Some(exp) => Some(exp.compile(&mut c.bb, c.func_data, Rc::clone(&c.symbols))),
         None => None,
       };
       let ret = c.func_data.dfg_mut().new_value().ret(ret_val);
@@ -94,7 +94,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
       c.func_data.layout_mut().bbs_mut().push_key_back(c.bb).unwrap();
     },
     Stmt::LVal(id, exp) => {
-      let val = exp.compile(c.bb, c.func_data, Rc::clone(&c.symbols));
+      let val = exp.compile(&mut c.bb, c.func_data, Rc::clone(&c.symbols));
       if let Some(IdentInfo::Var(var_info)) = c.symbols.borrow().get(id).as_deref() {
         let store = c.func_data.dfg_mut().new_value().store(val, var_info.dest);
         c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
@@ -114,42 +114,44 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
     },
     Stmt::Exp(exp) => {
       if let Some(e) = exp {
-        let _ = e.compile(c.bb, c.func_data, Rc::clone(&c.symbols));
+        let _ = e.compile(&mut c.bb, c.func_data, Rc::clone(&c.symbols));
       }
     },
     Stmt::Cond(cond, then_b, else_b) => {
-      let cond_val = cond.compile(c.bb, c.func_data, Rc::clone(&c.symbols));
+      let cond_val = cond.compile(&mut c.bb, c.func_data, Rc::clone(&c.symbols));
       let then_bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-      let else_bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
       let end_bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-      c.func_data.layout_mut().bbs_mut().extend([then_bb, else_bb, end_bb]);
+      c.func_data.layout_mut().bbs_mut().extend([then_bb, end_bb]);
 
-      let br = c.func_data.dfg_mut().new_value().branch(cond_val, then_bb, else_bb);
-      c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
-
-      c.bb = end_bb;
       // then 分支
       {
         let mut then_ctx = Context { bb: then_bb, func_data: c.func_data, symbols: Rc::clone(&c.symbols) };
         let then_end_bb = process_stmt(then_b, &mut then_ctx);
-        let jump = c.func_data.dfg_mut().new_value().jump(c.bb);
+        let jump = c.func_data.dfg_mut().new_value().jump(end_bb);
         c.func_data.layout_mut().bb_mut(then_end_bb).insts_mut().push_key_back(jump).unwrap();
       }
       // else 分支（如有）
       if let Some(else_b) = else_b {
+        let else_bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        c.func_data.layout_mut().bbs_mut().extend([else_bb]);
+        let br = c.func_data.dfg_mut().new_value().branch(cond_val, then_bb, else_bb);
+        c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
+
         let mut else_ctx = Context { bb: else_bb, func_data: c.func_data, symbols: Rc::clone(&c.symbols) };
         let else_end_bb = process_stmt(else_b, &mut else_ctx);
-        let jump = c.func_data.dfg_mut().new_value().jump(c.bb);
+        let jump = c.func_data.dfg_mut().new_value().jump(end_bb);
         c.func_data.layout_mut().bb_mut(else_end_bb).insts_mut().push_key_back(jump).unwrap();
       } else {
-        let jump = c.func_data.dfg_mut().new_value().jump(c.bb);
-        c.func_data.layout_mut().bb_mut(else_bb).insts_mut().push_key_back(jump).unwrap();
+        let br = c.func_data.dfg_mut().new_value().branch(cond_val, then_bb, end_bb);
+        c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
+
       }
+      c.bb = end_bb;
     },
   }
   c.bb
 }
-fn generate_bb_name() -> String {
+pub fn generate_bb_name() -> String {
   static mut BB_COUNT: u32 = 0;
   unsafe {
     BB_COUNT += 1;
