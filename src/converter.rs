@@ -148,6 +148,33 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
       }
       c.bb = end_bb;
     },
+    Stmt::While(cond, stmt) => {
+      let while_entry_bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      let while_body_bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      let while_end_bb = c.func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      c.func_data.layout_mut().bbs_mut().extend([while_entry_bb, while_body_bb, while_end_bb]);
+      let jump = c.func_data.dfg_mut().new_value().jump(while_entry_bb);
+      c.func_data.layout_mut().bb_mut(c.bb).insts_mut().push_key_back(jump).unwrap();
+
+      // while entry bb
+      {
+        let mut while_entry_bb = while_entry_bb; 
+        // compile 方法会修改传入的 BasicBlock, 不能污染真正的 while 入口
+        let cond_val = cond.compile(&mut while_entry_bb, c.func_data, Rc::clone(&c.symbols));
+        let br = c.func_data.dfg_mut().new_value().branch(cond_val, while_body_bb, while_end_bb);
+        c.func_data.layout_mut().bb_mut(while_entry_bb).insts_mut().push_key_back(br).unwrap();
+      }
+
+      // while body bb
+      {
+        let mut while_ctx = Context { bb: while_body_bb, func_data: c.func_data, symbols: Rc::clone(&c.symbols) };
+        let body_end_bb = process_stmt(stmt, &mut while_ctx);
+        let jump = c.func_data.dfg_mut().new_value().jump(while_entry_bb);
+        c.func_data.layout_mut().bb_mut(body_end_bb).insts_mut().push_key_back(jump).unwrap();
+      }
+
+      c.bb = while_end_bb;
+    }
   }
   c.bb
 }

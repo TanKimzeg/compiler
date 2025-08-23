@@ -7,4 +7,5 @@ pub enum Stmt {
     Block(Block),
     Exp(Option<Exp>),
     Cond(Exp, Box<Stmt>, Option<Box<Stmt>>),
+    While(Exp, Box<Stmt>),
 }

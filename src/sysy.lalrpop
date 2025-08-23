@@ -41,6 +41,8 @@ MatchedStmt: Stmt = {
   <exp: Exp?> ";" => Stmt::Exp(<>),
   "if" "(" <exp: Exp> ")" <then_m: MatchedStmt> "else" <else_m: MatchedStmt> =>
     Stmt::Cond(exp, Box::new(then_m), Some(Box::new(else_m))),
+  "while" "(" <exp: Exp> ")" <stmt: MatchedStmt> =>
+    Stmt::While(exp, Box::new(stmt)),
 };
 
 UnmatchedStmt: Stmt = {
@@ -48,6 +50,8 @@ UnmatchedStmt: Stmt = {
     Stmt::Cond(exp, Box::new(then_branch), None),
   "if" "(" <exp: Exp> ")" <then_m: MatchedStmt> "else" <else_u: UnmatchedStmt> =>
     Stmt::Cond(exp, Box::new(then_m), Some(Box::new(else_u))),
+  "while" "(" <exp: Exp> ")" <stmt: UnmatchedStmt> =>
+    Stmt::While(exp, Box::new(stmt)),
 };
 
 // ---------------------- Exp ------------------------
