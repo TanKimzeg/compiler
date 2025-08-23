@@ -12,12 +12,16 @@ match {
   _
 }
 
-pub CompUnit: CompUnit = <func_def: FuncDef> => CompUnit { <> };
+pub CompUnit: CompUnit = FuncDef => CompUnit::Func(<>);
 
 FuncDef: FuncDef = {
-  <func_type: FuncType> <id: Ident> "(" ")" <block: Block> => {
+  <func_type: FuncType> <id: Ident> "(" <params: Comma<FuncFParam>> ")" <block: Block> => {
     FuncDef { <> }
   }
+}
+
+FuncFParam: FuncFParam = {
+  <ty: BType> <id: Ident> => FuncFParam { <> },
 }
 
 FuncType: FuncType = "int" => FuncType::Int;
@@ -138,6 +142,7 @@ MulExp: MulExp = {
 UnaryExp: UnaryExp = {
   <pexp: PrimaryExp> => UnaryExp::PExp(<>),
   <u_op: UnaryOP> <u_exp: UnaryExp> => UnaryExp::OpExp(u_op, Box::new(u_exp)),
+  <id: Ident> "(" <args: Comma<Exp>> ")" => UnaryExp::FuncCall(id, args),
 };
 
 PrimaryExp: PrimaryExp = {

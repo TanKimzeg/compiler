@@ -58,6 +58,7 @@ pub struct Binary<T, S> {
 pub enum UnaryExp {
     PExp(PrimaryExp),
     OpExp(UnaryOP, Box<UnaryExp>),
+    FuncCall(String, Vec<Exp>),
 }
 
 pub enum PrimaryExp {

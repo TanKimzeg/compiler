@@ -3,31 +3,42 @@ use crate::ast::*;
 use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder};
 use koopa::ir::*;
 
-pub fn ast2ir(ast: &mut CompUnit) -> Program {
-    let mut program = Program::new();
+pub fn ast2ir(ast: &mut Module) -> Program {
+  let mut program = Program::new();
+  let global_st = ast.build_symbols();
 
-    let func = program.new_func(FunctionData::with_param_names(
-        format!("@{}", ast.func_def.id),
-        Vec::new(),
-        Type::get_i32(),
-    ));
+  for unit in &mut ast.units {
+    match unit {
+      CompUnit::Func(func_def) => {
+        traverse_func(&mut program, func_def, &global_st);
+      }
+    }
+  }
+  program
+}
 
-    let func_data = program.func_mut(func);
-    // entry basic block
-    let entry = func_data.dfg_mut().new_bb().basic_block(Some("%entry".into()));
-    func_data.layout_mut().bbs_mut().extend([entry]);
+fn traverse_func(program: &mut Program,func_def: &mut FuncDef, global_st: &Symbols) {
+  let func = program.new_func(FunctionData::with_param_names(
+    format!("@{}", func_def.id),
+    Vec::new(),
+    Type::get_i32(),
+  ));
 
-    let block = &mut ast.func_def.block;
-    let mut ctx = Context {
-        bb: entry,
-        func_data,
-        symbols: Rc::clone(&block.symbols),
-        while_ctx: Vec::new(),
-    };
-    let ret_bb = traverse_block(block, &mut ctx);
-    let ret = func_data.dfg_mut().new_value().ret(None);
-    func_data.layout_mut().bb_mut(ret_bb).insts_mut().push_key_back(ret).unwrap();
-    program
+  let func_data = program.func_mut(func);
+  // entry basic block
+  let entry = func_data.dfg_mut().new_bb().basic_block(Some("%entry".into()));
+  func_data.layout_mut().bbs_mut().extend([entry]);
+
+  let block = &mut func_def.block;
+  let mut ctx = Context {
+    bb: entry,
+    func_data,
+    symbols: Rc::clone(global_st),
+    while_ctx: Vec::new(),
+  };
+  let ret_bb = traverse_block(block, &mut ctx);
+  let ret = func_data.dfg_mut().new_value().ret(None);
+  func_data.layout_mut().bb_mut(ret_bb).insts_mut().push_key_back(ret).unwrap();
 }
 
 struct Context<'a> {
