@@ -1,4 +1,3 @@
-use std::rc::Rc;
 use koopa::ir::*;
 use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder, ValueBuilder};
 use crate::ast::{Symbols, SymbolsExt};
@@ -74,39 +73,61 @@ pub enum UnaryOP {
 }
 
 // ----------------------- trait Compile -----------------------
+pub struct Context<'a> {
+  pub bb: BasicBlock,
+  pub program: &'a mut Program,
+  pub curr_func: Function,
+  pub symbols: Symbols, 
+  pub while_ctx: Vec<WhileContext>,
+}
+#[derive(Clone)]
+pub struct WhileContext {
+  pub entry: BasicBlock,
+  pub end: BasicBlock,
+}
 pub trait Compile {
     /// 将表达式编译入函数的块中, 并返回生成的值, 为语句执行下一步
-    fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value;
+    fn compile(&self, c: &mut Context) -> Value;
 }
 
 impl Compile for UnaryExp {
-  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, c: &mut Context) -> Value {
     match self {
       UnaryExp::OpExp(op, exp) => {
-        let val = exp.compile(bb, func_data, st);
+        let val = exp.compile(c);
         match op {
           UnaryOP::Plus => val,
           UnaryOP::Minus => {
-            let zero = func_data.dfg_mut().new_value().integer(0);
-            let sub = func_data.dfg_mut().new_value().binary(BinaryOp::Sub, zero, val);
-            func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(sub).unwrap();
+            let zero = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(0);
+            let sub = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::Sub, zero, val);
+            c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(sub).unwrap();
             sub
           },
           UnaryOP::Not => {
-            let zero = func_data.dfg_mut().new_value().integer(0);
-            let eq = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, val, zero);
-            func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(eq).unwrap();
+            let zero = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(0);
+            let eq = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::Eq, val, zero);
+            c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(eq).unwrap();
             eq
           }
         }
       }
-      UnaryExp::PExp(pexp) => pexp.compile(bb, func_data, st),
+      UnaryExp::PExp(pexp) => pexp.compile(c),
       UnaryExp::FuncCall(id, args) => {
-        let func_info = st.get(id).expect(format!("Function '{}' not found", id).as_str());
+        let func_info = c.symbols.borrow().get(id).expect(format!("Function '{}' not found", id).as_str());
         if let IdentInfo::Func(func) = func_info.as_ref() {
-          let arg_vals: Vec<Value> = args.iter().map(|arg| arg.compile(bb, func_data, Rc::clone(&st))).collect();
-          let call = func_data.dfg_mut().new_value().call(*func, arg_vals);
-          func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(call).unwrap();
+          let arg_vals: Vec<Value> = args.iter().map(|arg| arg.compile(c)).collect();
+          // 检查参数数量,类型检查未实现
+          {
+            assert_eq!(arg_vals.len(), c.program.func(*func).params().len(),
+                "Function '{}' expects {} arguments, but {} were provided", id, c.program.func_mut(*func).params().len(), arg_vals.len());
+            // assert_eq!(c.program.func(*func).params().iter().map(
+            //   |(_, ty)| ty).collect() == arg_vals.iter().map(
+            //     |v| Type::get(c.program.func(c.curr_func).dfg().value(v).kind())
+            //   ).collect(),
+            //   "Function '{}' argument types do not match", id);
+          }
+          let call = c.program.func_mut(c.curr_func).dfg_mut().new_value().call(*func, arg_vals);
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(call).unwrap();
           call
         } else {
           panic!("Identifier '{}' is not a function", id);
@@ -118,23 +139,23 @@ impl Compile for UnaryExp {
 }
 
 impl Compile for PrimaryExp {
-   fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+   fn compile(&self, c: &mut Context) -> Value {
        match self {
-           PrimaryExp::Exp(exp) => exp.compile(bb, func_data, st),
+           PrimaryExp::Exp(exp) => exp.compile(c),
            PrimaryExp::Number(num) => {
                // can not name constant value, so don't `push_key_back()`
-               func_data.dfg_mut().new_value().integer(*num)
+               c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(*num)
            },
            PrimaryExp::LVal(id) => {
-            if let Some(info) = st.get(id) {
+            if let Some(info) =  c.symbols.borrow().get(id) {
                 match info.as_ref() {
                   IdentInfo::Const(val) => {
-                    func_data.dfg_mut().new_value().integer(*val)
+                    c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(*val)
                   }
                   IdentInfo::Var(var) => {
                     // 变量值是一个指针, 需要加载
-                    let load = func_data.dfg_mut().new_value().load(*var);
-                    func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(load).unwrap();
+                    let load = c.program.func_mut(c.curr_func).dfg_mut().new_value().load(*var);
+                    c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(load).unwrap();
                     load
                   }
                   _ => unreachable!("FuncInfo should not appear here"),
@@ -148,74 +169,74 @@ impl Compile for PrimaryExp {
 }
 
 impl Compile for Exp {
-  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, c: &mut Context) -> Value {
     match self {
-      Exp::LOrExp(lor_exp) => lor_exp.compile(bb, func_data, st),
+      Exp::LOrExp(lor_exp) => lor_exp.compile(c),
     }
   }
 }
 
 impl Compile for LOrExp {
-  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, c: &mut Context) -> Value {
       match self {
-        LOrExp::Single(land_exp) => land_exp.compile(bb, func_data, st),
+        LOrExp::Single(land_exp) => land_exp.compile(c),
         LOrExp::Binary(binary) => {
-          binary.compile(bb, func_data,st)
+          binary.compile(c)
         }
       }
   } 
 }
 
 impl Compile for LAndExp {
-  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, c: &mut Context) -> Value {
       match self {
-        LAndExp::Single(eq_exp) => eq_exp.compile(bb, func_data, st),
+        LAndExp::Single(eq_exp) => eq_exp.compile(c),
         LAndExp::Binary(binary) => {
-          binary.compile(bb, func_data, st)
+          binary.compile(c)
         }
       }
   }  
 }
 
 impl Compile for EqExp {
-  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, c: &mut Context) -> Value {
     match self {
-      EqExp::Single(rel_exp) => rel_exp.compile(bb, func_data, st),
+      EqExp::Single(rel_exp) => rel_exp.compile(c),
       EqExp::Binary(binary) => {
-        binary.compile(bb, func_data, st)
+        binary.compile(c)
       }
     }
   }
 }
 
 impl Compile for RelExp {
-  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, c: &mut Context) -> Value {
     match self {
-      RelExp::Single(add_exp) => add_exp.compile(bb, func_data,st),
+      RelExp::Single(add_exp) => add_exp.compile(c),
       RelExp::Binary(binary) => {
-        binary.compile(bb, func_data, st)
+        binary.compile(c)
       }
     }
   }
 }
 
 impl Compile for AddExp {
-  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, c: &mut Context) -> Value {
     match self {
-      AddExp::Single(mul_exp) => mul_exp.compile(bb, func_data,st),
+      AddExp::Single(mul_exp) => mul_exp.compile(c),
       AddExp::Binary(binary) => {
-        binary.compile(bb, func_data, st)
+        binary.compile(c)
       }
     }
   }
 }
 
 impl Compile for MulExp {
-  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, c: &mut Context) -> Value {
     match self {
-      MulExp::Single(unary_exp) => unary_exp.compile(bb, func_data, st),
+      MulExp::Single(unary_exp) => unary_exp.compile(c),
       MulExp::Binary(binary) => {
-        binary.compile(bb, func_data, st)
+        binary.compile(c)
       }
     }
   } 
@@ -223,10 +244,10 @@ impl Compile for MulExp {
 
 impl<T, S> Compile for Binary<T, S> 
 where T: Compile, S: Compile {
-  fn compile(&self, bb: &mut BasicBlock, func_data: &mut FunctionData, st: Symbols) -> Value {
+  fn compile(&self, c: &mut Context) -> Value {
     use crate::converter::generate_bb_name;
-    let lhs = self.lhs.compile(bb, func_data, Rc::clone(&st));
-    let rhs = self.rhs.compile(bb, func_data, Rc::clone(&st));
+    let lhs = self.lhs.compile(c);
+    let rhs = self.rhs.compile(c);
     match self.op {
       // 执行短路操作
       BinOp::LOr => {
@@ -234,33 +255,33 @@ where T: Compile, S: Compile {
         // if (lhs == 0) {
         //  result = (rhs != 0)
         // }
-        let one = func_data.dfg_mut().new_value().integer(1);
-        let result = func_data.dfg_mut().new_value().alloc(Type::get_i32());
-        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(result).unwrap();
-        let store = func_data.dfg_mut().new_value().store(one, result);
-        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(store).unwrap();
+        let one = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(1);
+        let result = c.program.func_mut(c.curr_func).dfg_mut().new_value().alloc(Type::get_i32());
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(result).unwrap();
+        let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(one, result);
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
 
-        let zero = func_data.dfg_mut().new_value().integer(0);
-        let l0 = func_data.dfg_mut().new_value().binary(BinaryOp::Eq, lhs, zero);
-        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(l0).unwrap();
-        let then_bb = func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-        let end_bb = func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-        func_data.layout_mut().bbs_mut().extend([then_bb, end_bb]);
-        let br = func_data.dfg_mut().new_value().branch(l0, then_bb, end_bb);
-        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(br).unwrap();
+        let zero = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(0);
+        let l0 = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::Eq, lhs, zero);
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(l0).unwrap();
+        let then_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        let end_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        c.program.func_mut(c.curr_func).layout_mut().bbs_mut().extend([then_bb, end_bb]);
+        let br = c.program.func_mut(c.curr_func).dfg_mut().new_value().branch(l0, then_bb, end_bb);
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
         // then 分支
         {
-          let res = func_data.dfg_mut().new_value().binary(BinaryOp::NotEq, zero, rhs);
-          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(res).unwrap();
-          let store = func_data.dfg_mut().new_value().store(res, result);
-          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(store).unwrap();
+          let res = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::NotEq, zero, rhs);
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(res).unwrap();
+          let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(res, result);
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(store).unwrap();
           
-          let jump = func_data.dfg_mut().new_value().jump(end_bb);
-          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(jump).unwrap();
+          let jump = c.program.func_mut(c.curr_func).dfg_mut().new_value().jump(end_bb);
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(jump).unwrap();
         }
-        *bb = end_bb;
-        let result = func_data.dfg_mut().new_value().load(result);
-        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(result).unwrap();
+        c.bb = end_bb;
+        let result = c.program.func_mut(c.curr_func).dfg_mut().new_value().load(result);
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(result).unwrap();
         return result;
         
         // let zero = func_data.dfg_mut().new_value().integer(0);
@@ -279,32 +300,32 @@ where T: Compile, S: Compile {
         // if (lhs != 0) {
         //  result = (rhs != 0)
         // }
-        let zero = func_data.dfg_mut().new_value().integer(0);
-        let result = func_data.dfg_mut().new_value().alloc(Type::get_i32());
-        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(result).unwrap();
-        let store = func_data.dfg_mut().new_value().store(zero, result);
-        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(store).unwrap();
+        let zero = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(0);
+        let result = c.program.func_mut(c.curr_func).dfg_mut().new_value().alloc(Type::get_i32());
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(result).unwrap();
+        let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(zero, result);
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
 
-        let l0 = func_data.dfg_mut().new_value().binary(BinaryOp::NotEq, lhs, zero);
-        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(l0).unwrap();
-        let then_bb = func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-        let end_bb = func_data.dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-        func_data.layout_mut().bbs_mut().extend([then_bb, end_bb]);
-        let br = func_data.dfg_mut().new_value().branch(l0, then_bb, end_bb);
-        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(br).unwrap();
+        let l0 = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::NotEq, lhs, zero);
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(l0).unwrap();
+        let then_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        let end_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        c.program.func_mut(c.curr_func).layout_mut().bbs_mut().extend([then_bb, end_bb]);
+        let br = c.program.func_mut(c.curr_func).dfg_mut().new_value().branch(l0, then_bb, end_bb);
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
         // then 分支
         {
-          let res = func_data.dfg_mut().new_value().binary(BinaryOp::NotEq, zero, rhs);
-          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(res).unwrap();
-          let store = func_data.dfg_mut().new_value().store(res, result);
-          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(store).unwrap();
+          let res = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::NotEq, zero, rhs);
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(res).unwrap();
+          let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(res, result);
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(store).unwrap();
           
-          let jump = func_data.dfg_mut().new_value().jump(end_bb);
-          func_data.layout_mut().bb_mut(then_bb).insts_mut().push_key_back(jump).unwrap();
+          let jump = c.program.func_mut(c.curr_func).dfg_mut().new_value().jump(end_bb);
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(jump).unwrap();
         }
-        *bb = end_bb;
-        let result = func_data.dfg_mut().new_value().load(result);
-        func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(result).unwrap();
+        c.bb = end_bb;
+        let result = c.program.func_mut(c.curr_func).dfg_mut().new_value().load(result);
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(result).unwrap();
         return result;
 
         // let zero = func_data.dfg_mut().new_value().integer(0);
@@ -334,8 +355,8 @@ where T: Compile, S: Compile {
       BinOp::NEq => BinaryOp::NotEq,
       _ => unreachable!("Logical operators should be handled separately"),
     };
-    let bin_op = func_data.dfg_mut().new_value().binary(op, lhs, rhs);
-    func_data.layout_mut().bb_mut(*bb).insts_mut().push_key_back(bin_op).unwrap();
+    let bin_op = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(op, lhs, rhs);
+    c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(bin_op).unwrap();
     bin_op
   }
 }
