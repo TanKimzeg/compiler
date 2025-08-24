@@ -145,6 +145,9 @@ pub fn riscv_text(program: Program) -> String {
   let mut asm_text = String::new();
   for &func in program.func_layout() {
     let func_data = program.func(func);
+    if func_data.layout().bbs().is_empty() {
+      continue;
+    }
     asm_text.push_str(format!("\t.text\n\t.globl {}\n", &func_data.name()[1..]).as_str());
     asm_text.push_str(format!("{}:\n", &func_data.name()[1..]).as_str());
     let mut c = Context::new(&program, func);
