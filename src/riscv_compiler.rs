@@ -73,6 +73,25 @@ impl<'a> Context<'a> {
         offset.insert(arg, Position::Reg(Reg::from_str(format!("a{}", i).as_str())));
       }
     }
+    for (&_bb, node) in func_data.layout().bbs() {
+      for &inst in node.insts().keys() {
+        let val_data = func_data.dfg().value(inst);
+        let val_kind = val_data.kind();
+        if let ValueKind::Call(call) = val_kind {
+          let mut a_ = 0;
+          for (i, &arg) in call.args().iter().enumerate() {
+            if i > 7 {
+              // 超过8个参数,在调用者的栈上，所以超出了本函数的栈帧
+              offset.insert(arg, Position::Stack(a_));
+              a_ += 4;
+            } else {
+              offset.insert(arg, Position::Reg(Reg::from_str(format!("a{}", i).as_str())));
+            }
+          }
+          assert!(a_ <= a, "Argument stack space overflow");
+        }
+      }
+    }
     (s, r != 0, offset)
   }
   pub fn get_offset(&self, val: Value) -> Position {
@@ -426,7 +445,7 @@ impl Reg {
     let pos = c.get_offset(val);
     match pos {
       Position::Reg(r) => {
-        unimplemented!("Cannot store to register {}", r.to_string());
+        asm_text.push_str(&format!("\tmv {}, {}\n", r.to_string(), reg.to_string()));
       }
       Position::Stack(offset) => {
         asm_text.push_str(format!("\tsw {}, {}(sp)\n", reg.to_string(), offset).as_str());
