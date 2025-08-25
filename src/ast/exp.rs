@@ -247,7 +247,6 @@ where T: Compile, S: Compile {
   fn compile(&self, c: &mut Context) -> Value {
     use crate::converter::generate_bb_name;
     let lhs = self.lhs.compile(c);
-    let rhs = self.rhs.compile(c);
     match self.op {
       // 执行短路操作
       BinOp::LOr => {
@@ -271,13 +270,15 @@ where T: Compile, S: Compile {
         c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
         // then 分支
         {
+          c.bb = then_bb;
+          let rhs = self.rhs.compile(c);
           let res = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::NotEq, zero, rhs);
-          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(res).unwrap();
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(res).unwrap();
           let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(res, result);
-          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(store).unwrap();
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
           
           let jump = c.program.func_mut(c.curr_func).dfg_mut().new_value().jump(end_bb);
-          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(jump).unwrap();
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(jump).unwrap();
         }
         c.bb = end_bb;
         let result = c.program.func_mut(c.curr_func).dfg_mut().new_value().load(result);
@@ -315,6 +316,8 @@ where T: Compile, S: Compile {
         c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
         // then 分支
         {
+          c.bb = then_bb;
+          let rhs = self.rhs.compile(c);
           let res = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::NotEq, zero, rhs);
           c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(res).unwrap();
           let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(res, result);
@@ -355,6 +358,7 @@ where T: Compile, S: Compile {
       BinOp::NEq => BinaryOp::NotEq,
       _ => unreachable!("Logical operators should be handled separately"),
     };
+    let rhs = self.rhs.compile(c);
     let bin_op = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(op, lhs, rhs);
     c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(bin_op).unwrap();
     bin_op

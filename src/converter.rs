@@ -12,6 +12,7 @@ pub fn ast2ir(ast: &mut Module) -> Program {
       CompUnit::Func(func_def) => {
         traverse_func(&mut program, func_def, &global_st);
       }
+      _ => { },
     }
   }
   program
@@ -37,10 +38,10 @@ fn traverse_func(program: &mut Program, func_def: &mut FuncDef, global_st: &Symb
     program.func_mut(*func).layout_mut().bb_mut(entry).insts_mut().push_key_back(slot).unwrap();
     let store = program.func_mut(*func).dfg_mut().new_value().store(*arg, slot);
     program.func_mut(*func).layout_mut().bb_mut(entry).insts_mut().push_key_back(store).unwrap();
-    block.symbols.borrow_mut().insert(
+    block.symbols.borrow_mut().declare(
       func_def.params[i].0.clone(), 
       Rc::new(IdentInfo::Var(slot)),
-    );
+    ).unwrap();
   }
   let mut ctx = Context {
     bb: entry,
@@ -67,7 +68,10 @@ fn traverse_block(block: &mut Block, c: &mut Context) -> BasicBlock {
             let id = &const_def.id;
             let ConstInit::ConstExp(exp) = &const_def.init;
             let val = exp.calc(&c.symbols);
-            c.symbols.borrow_mut().insert(id.clone(), Rc::new(IdentInfo::Const(val)));
+            c.symbols.borrow_mut().declare(
+              id.clone(), 
+              Rc::new(IdentInfo::Const(val))
+            ).unwrap();
           }
         },
         Decl::VarDecl(varl_decl) => {
@@ -77,19 +81,19 @@ fn traverse_block(block: &mut Block, c: &mut Context) -> BasicBlock {
             c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(new_var).unwrap();
             match &var_def.init {
               None => {
-                c.symbols.borrow_mut().insert(
+                c.symbols.borrow_mut().declare(
                   id.clone(),
-                  Rc::new(IdentInfo::Var(new_var )),
-                );
+                  Rc::new(IdentInfo::Var(new_var)),
+                ).unwrap();
               },
               Some(VarInit::VarExp(exp)) => {
                 let val = exp.compile(c);
                 let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(val, new_var);
                 c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
-                c.symbols.borrow_mut().insert(
+                c.symbols.borrow_mut().declare(
                   id.clone(),
                   Rc::new(IdentInfo::Var(new_var)),
-                );
+                ).unwrap();
               }
             }
           }
@@ -193,7 +197,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
 
       // while entry bb
       {
-        let while_entry_bb = while_entry_bb;
+        c.bb = while_entry_bb;
         // compile 方法会修改传入的 BasicBlock, 不能污染真正的 while 入口
         let cond_val = cond.compile(c);
         let br = c.program.func_mut(c.curr_func).dfg_mut().new_value().branch(cond_val, while_body_bb, while_end_bb);

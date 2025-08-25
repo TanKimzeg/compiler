@@ -1,7 +1,7 @@
 use std::rc::Rc;
-use koopa::ir::{Program, FunctionData, Type};
+use koopa::ir::{builder::{GlobalInstBuilder, ValueBuilder}, FunctionData, Program, Type};
 
-use crate::ast::block::*;
+use crate::ast::{block::*, decl::*, exp::*};
 
 
 pub struct Module {
@@ -24,10 +24,49 @@ impl Module {
 						}).collect(),
 						func_def.func_type.clone(),
 					));
-          st.borrow_mut().insert(
+          st.borrow_mut().declare(
             func_def.id.clone(), 
             Rc::new(IdentInfo::Func(func))
-          );
+          ).unwrap();
+        }
+        CompUnit::Decl(decl) => {
+          match decl {
+            Decl::ConstDecl(const_decl) => {
+              for const_def in &const_decl.defs {
+                let id = &const_def.id;
+                let ConstInit::ConstExp(exp) = &const_def.init;
+                let val = exp.calc(&st);
+                st.borrow_mut().declare(id.clone(),
+                Rc::new(IdentInfo::Const(val))
+              ).unwrap();
+              }
+            }
+            Decl::VarDecl(varl_decl) => {
+              for var_def in &varl_decl.defs {
+                let id = &var_def.id;
+                match &var_def.init {
+                  None => {
+                    let new_var = program.new_value().zero_init(Type::get_i32());
+                    let var_val = program.new_value().global_alloc(new_var);
+                    program.set_value_name(var_val, Some(format!("@{}", id)));
+                    st.borrow_mut().declare(
+                      id.clone(),
+                      Rc::new(IdentInfo::Var(var_val)),
+                    ).unwrap();
+                  },
+                  Some(VarInit::VarExp(exp)) => {
+                    let val = program.new_value().integer(exp.calc(&st));
+                    let new_var = program.new_value().global_alloc( val);
+                    program.set_value_name(new_var, Some(format!("@{}", id)));
+                    st.borrow_mut().declare(
+                      id.clone(),
+                      Rc::new(IdentInfo::Var(new_var)),
+                    ).unwrap();
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -55,19 +94,20 @@ impl Module {
       "@starttime".into(), vec![], Type::get_unit()));
     let stoptime = program.new_func(FunctionData::new(
       "@stoptime".into(), vec![], Type::get_unit()));
-    global_st.borrow_mut().insert("getint".into(), Rc::new(IdentInfo::Func(getint)));
-    global_st.borrow_mut().insert("getch".into(), Rc::new(IdentInfo::Func(getch)));
-    global_st.borrow_mut().insert("getarray".into(), Rc::new(IdentInfo::Func(getarray)));
-    global_st.borrow_mut().insert("putint".into(), Rc::new(IdentInfo::Func(putint)));
-    global_st.borrow_mut().insert("putch".into(), Rc::new(IdentInfo::Func(putch)));
-    global_st.borrow_mut().insert("putarray".into(), Rc::new(IdentInfo::Func(putarray)));
-    global_st.borrow_mut().insert("starttime".into(), Rc::new(IdentInfo::Func(starttime)));
-    global_st.borrow_mut().insert("stoptime".into(), Rc::new(IdentInfo::Func(stoptime)));
+    global_st.borrow_mut().declare("getint".into(), Rc::new(IdentInfo::Func(getint))).unwrap();
+    global_st.borrow_mut().declare("getch".into(), Rc::new(IdentInfo::Func(getch))).unwrap();
+    global_st.borrow_mut().declare("getarray".into(), Rc::new(IdentInfo::Func(getarray))).unwrap();
+    global_st.borrow_mut().declare("putint".into(), Rc::new(IdentInfo::Func(putint))).unwrap();
+    global_st.borrow_mut().declare("putch".into(), Rc::new(IdentInfo::Func(putch))).unwrap();
+    global_st.borrow_mut().declare("putarray".into(), Rc::new(IdentInfo::Func(putarray))).unwrap();
+    global_st.borrow_mut().declare("starttime".into(), Rc::new(IdentInfo::Func(starttime))).unwrap();
+    global_st.borrow_mut().declare("stoptime".into(), Rc::new(IdentInfo::Func(stoptime))).unwrap();
 }
 }
 
 pub enum CompUnit {
-  Func(FuncDef)
+  Func(FuncDef),
+  Decl(Decl),
 }
 
 pub struct FuncDef {

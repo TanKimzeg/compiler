@@ -15,7 +15,30 @@ match {
 
 pub Module: Module = <units: CompUnit*> => Module{ <> };
 
-CompUnit: CompUnit = FuncDef => CompUnit::Func(<>);
+CompUnit: CompUnit = {
+  "void" <id: Ident> "(" <params: Comma<FuncFParam>> ")" <block: Block> =>
+    CompUnit::Func(FuncDef{
+      func_type: Type::get_unit(),
+      id,
+      params,
+      block
+    }),
+  "int" <id: Ident> "(" <params: Comma<FuncFParam>> ")" <block: Block> =>
+    CompUnit::Func(FuncDef{
+      func_type: Type::get_i32(),
+      id,
+      params,
+      block
+    }),
+  "int" <defs: Comma<VarDef>> ";" => CompUnit::Decl(Decl::VarDecl(VarDecl{
+    ty: Type::get_i32(),
+    defs
+  })),
+  "const" "int" <defs: Comma<ConstDef>> ";" => CompUnit::Decl(Decl::ConstDecl(ConstDecl{
+    ty: Type::get_i32(),
+    defs
+  })),
+};
 
 FuncDef: FuncDef = {
   <func_type: FuncType> <id: Ident> "(" <params: Comma<FuncFParam>> ")" <block: Block> => {

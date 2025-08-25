@@ -42,8 +42,17 @@ impl SymbolTable {
 		self.parent = Some(Rc::clone(&parent));
 	}
 
-	pub fn insert(&mut self, id: String, info: Rc<IdentInfo>) {
+	fn insert(&mut self, id: String, info: Rc<IdentInfo>) {
 		self.locals.insert(id, info);
+	}
+
+	pub fn declare(&mut self, id: String, info: Rc<IdentInfo>) -> Result<(), String> {
+		if self.locals.contains_key(&id) {
+			Err(format!("Redefinition of identifier `{}`", id))
+		} else {
+			self.locals.insert(id, info);
+			Ok(())
+		}
 	}
 
 	pub fn get(&self, id: &str) -> Option<Rc<IdentInfo>> {
