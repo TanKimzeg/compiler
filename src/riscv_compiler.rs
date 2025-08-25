@@ -162,6 +162,30 @@ trait ValueKindExt {
 
 pub fn riscv_text(program: Program) -> String {
   let mut asm_text = String::new();
+  asm_text.push_str("\t.data\n");
+  for &inst in program.inst_layout() {
+    if inst.is_global() {
+      let global_val_data = program.borrow_value(inst);
+      if let ValueKind::GlobalAlloc(global_alloc) = global_val_data.kind() {
+        let global_name = global_val_data.name().as_ref().unwrap()
+          .strip_prefix('@').unwrap();
+        let init_val = global_alloc.init();
+        asm_text.push_str(&format!("\t.globl {}\n", global_name));
+        asm_text.push_str(&format!("{}:\n", global_name));
+        match program.borrow_value(init_val).kind() {
+          ValueKind::Integer(i) => {
+            asm_text.push_str(&format!("\t.word {}\n", i.value()));
+          }
+          ValueKind::ZeroInit(_) => {
+            asm_text.push_str(&format!("\t.zero {}\n", 4));
+          }
+          _ => unreachable!("Unsupported global init value: {:?}", program.borrow_value(init_val).kind()),
+        }
+      } else {
+        unreachable!("Global value is not GlobalAlloc: {:?}", global_val_data.kind());
+      }
+    }
+    }
   for &func in program.func_layout() {
     let func_data = program.func(func);
     if func_data.layout().bbs().is_empty() {
@@ -419,21 +443,38 @@ impl Reg {
   }
   pub fn load_value_to_reg(c: &mut Context, val: Value, reg: Reg) -> String {
     let mut asm_text = String::new();
-    let val_data = c.program.func(c.curr_func).dfg().value(val);
-    match val_data.kind() {
-      ValueKind::Integer(i) => {
-        asm_text.push_str(format!("\tli {}, {}\n", reg.to_string(), i.value()).as_str());
-      },
-      _ => {
-        let pos = c.get_offset(val);
-        match pos {
-          Position::Reg(r) => {
-            if r != reg {
-              asm_text.push_str(format!("\tmv {}, {}\n", reg.to_string(), r.to_string()).as_str());
+    if val.is_global() {
+      let val_data = c.program.borrow_value(val);
+      match val_data.kind() {
+        ValueKind::GlobalAlloc(_) => {
+          let name = val_data.name().as_ref().unwrap()
+            .strip_prefix('@').unwrap();
+          asm_text.push_str(&format!(
+            "\tlui {}, %hi({})\n", reg.to_string(), name
+          ));
+          asm_text.push_str(&format!(
+            "\tlw {}, %lo({})({})\n", reg.to_string(), name, reg.to_string()
+          ));
+        }
+        _ => { unimplemented!("Unsupported global value kind: {:?}", val_data.kind()) },
+      }
+    } else {
+      let val_data = c.program.func(c.curr_func).dfg().value(val);
+      match val_data.kind() {
+        ValueKind::Integer(i) => {
+          asm_text.push_str(format!("\tli {}, {}\n", reg.to_string(), i.value()).as_str());
+        },
+        _ => {
+          let pos = c.get_offset(val);
+          match pos {
+            Position::Reg(r) => {
+              if r != reg {
+                asm_text.push_str(format!("\tmv {}, {}\n", reg.to_string(), r.to_string()).as_str());
+              }
             }
-          }
-          Position::Stack(offset) => {
-            asm_text.push_str(format!("\tlw {}, {}(sp)\n", reg.to_string(), offset).as_str());
+            Position::Stack(offset) => {
+              asm_text.push_str(format!("\tlw {}, {}(sp)\n", reg.to_string(), offset).as_str());
+            }
           }
         }
       }
@@ -442,13 +483,30 @@ impl Reg {
   }
   pub fn store_reg_to_stack(c: &mut Context, reg: Reg, val: Value) -> String {
     let mut asm_text = String::new();
-    let pos = c.get_offset(val);
-    match pos {
-      Position::Reg(r) => {
-        asm_text.push_str(&format!("\tmv {}, {}\n", r.to_string(), reg.to_string()));
+    if val.is_global() {
+      let val_data = c.program.borrow_value(val);
+      match val_data.kind() {
+        ValueKind::GlobalAlloc(_) => {
+          let name = val_data.name().as_ref().unwrap()
+            .strip_prefix('@').unwrap();
+          asm_text.push_str(&format!(
+            "\tlui {}, %hi({})\n", Reg::A0.to_string(), name
+          )); // 全局变量的地址存放在 a0 寄存器中
+          asm_text.push_str(&format!(
+            "\tsw {}, %lo({})({})\n", reg.to_string(), name, Reg::A0.to_string()
+          ));
+        }
+        _ => { unimplemented!("Unsupported global value kind: {:?}", val_data.kind()) },
       }
-      Position::Stack(offset) => {
-        asm_text.push_str(format!("\tsw {}, {}(sp)\n", reg.to_string(), offset).as_str());
+    } else {
+      let pos = c.get_offset(val);
+      match pos {
+        Position::Reg(r) => {
+          asm_text.push_str(&format!("\tmv {}, {}\n", r.to_string(), reg.to_string()));
+        }
+        Position::Stack(offset) => {
+          asm_text.push_str(format!("\tsw {}, {}(sp)\n", reg.to_string(), offset).as_str());
+        }
       }
     }
     asm_text

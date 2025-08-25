@@ -201,7 +201,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
         // compile 方法会修改传入的 BasicBlock, 不能污染真正的 while 入口
         let cond_val = cond.compile(c);
         let br = c.program.func_mut(c.curr_func).dfg_mut().new_value().branch(cond_val, while_body_bb, while_end_bb);
-        c.program.func_mut(c.curr_func).layout_mut().bb_mut(while_entry_bb).insts_mut().push_key_back(br).unwrap();
+        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
       }
 
       // while body bb
