@@ -39,10 +39,8 @@ fn main() -> Result<()> {
     }
 
     _ => {
-      eprintln!("Unknown mode: {}", mode);
-      panic!();
+      panic!("Unknown mode: {}", mode);
     }
   };
-  println!("{}", text);
   std::fs::write(output, text)
 }

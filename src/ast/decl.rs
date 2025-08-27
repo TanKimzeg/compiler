@@ -13,13 +13,14 @@ pub struct ConstDecl {
 	pub defs: Vec<ConstDef>,
 }
 
-pub struct ConstDef {
-	pub id: String,
-	pub init: ConstInit,
+pub enum ConstDef {
+	ConstExp(String, ConstInit),
+	ConstArray(String, Exp, ConstInit),
 }
 
 pub enum ConstInit {
 	ConstExp(Exp),
+	ConstArray(Vec<Exp>),
 }
 
 pub struct VarDecl {
@@ -27,11 +28,12 @@ pub struct VarDecl {
 	pub defs: Vec<VarDef>,
 }
 
-pub struct VarDef {
-	pub id: String,
-	pub init: Option<VarInit>,
+pub enum VarDef {
+	Var(String, Option<ValInit>),
+	ArrayVar(String, Exp, Option<ValInit>),
 }
 
-pub enum VarInit {
-	VarExp(Exp),
+pub enum ValInit {
+	Exp(Exp),
+	Array(Vec<Exp>),
 }

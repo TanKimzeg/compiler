@@ -16,44 +16,28 @@ match {
 pub Module: Module = <units: CompUnit*> => Module{ <> };
 
 CompUnit: CompUnit = {
-  "void" <id: Ident> "(" <params: Comma<FuncFParam>> ")" <block: Block> =>
-    CompUnit::Func(FuncDef{
-      func_type: Type::get_unit(),
-      id,
-      params,
-      block
-    }),
-  "int" <id: Ident> "(" <params: Comma<FuncFParam>> ")" <block: Block> =>
-    CompUnit::Func(FuncDef{
-      func_type: Type::get_i32(),
-      id,
-      params,
-      block
-    }),
-  "int" <defs: Comma<VarDef>> ";" => CompUnit::Decl(Decl::VarDecl(VarDecl{
-    ty: Type::get_i32(),
-    defs
-  })),
-  "const" "int" <defs: Comma<ConstDef>> ";" => CompUnit::Decl(Decl::ConstDecl(ConstDecl{
-    ty: Type::get_i32(),
-    defs
-  })),
+  FuncDef => CompUnit::Func(<>),
+  Decl => CompUnit::Decl(<>),
 };
 
 FuncDef: FuncDef = {
-  <func_type: FuncType> <id: Ident> "(" <params: Comma<FuncFParam>> ")" <block: Block> => {
-    FuncDef { <> }
+  <head: FuncHead> ")" <block: Block> => {
+    FuncDef { func_type: head.0, id: head.1, params: Vec::new(), block }
+  },
+  <head: FuncHead> <p0: FuncFParam> <mut ps: ("," <FuncFParam>)*> ")" <block: Block> => {
+    ps.insert(0, p0);
+    FuncDef { func_type: head.0, id: head.1, params: ps, block }
   }
+}
+FuncHead: (Type, String) = {
+  "int" <id: Ident> "("  => (Type::get_i32(), id),
+  "void" <id: Ident> "(" => (Type::get_unit(), id),
 }
 
 FuncFParam: (String, Type) = {
-  <ty: BType> <id: Ident> => (id, ty),
+  "int" <id: Ident> => (id, Type::get_i32()),
 }
 
-FuncType: Type = {
-  "int" => Type::get_i32(),
-  "void" => Type::get_unit(),
-};
 
 Block: Block = "{" <items: BlockItem*> "}" => Block::new(items);
 
@@ -69,7 +53,7 @@ Stmt: Stmt = {
 
 MatchedStmt: Stmt = {
   "return" <exp: Exp?> ";" => Stmt::Ret(<>),
-  <id: Ident> "=" <exp: Exp> ";" => Stmt::LVal(<>),
+  <lval: LVal> "=" <exp: Exp> ";" => Stmt::Assign(<>),
   Block => Stmt::Block(<>),
   <exp: Exp?> ";" => Stmt::Exp(<>),
   "if" "(" <exp: Exp> ")" <then_m: MatchedStmt> "else" <else_m: MatchedStmt> =>
@@ -91,6 +75,11 @@ UnmatchedStmt: Stmt = {
 
 // ---------------------- Exp ------------------------
 Exp: Exp = <add_exp: LOrExp> => Exp::LOrExp(<>);
+
+LVal: LVal = {
+  <id: Ident> => LVal::Ident(id),
+  <id: Ident> "[" <exp: Exp> "]" => LVal::ArrayElem(id, Box::new(exp)),
+};
 
 LOrExp: LOrExp = {
   <land_exp: LAndExp> => LOrExp::Single(<>),
@@ -171,13 +160,19 @@ MulExp: MulExp = {
 UnaryExp: UnaryExp = {
   <pexp: PrimaryExp> => UnaryExp::PExp(<>),
   <u_op: UnaryOP> <u_exp: UnaryExp> => UnaryExp::OpExp(u_op, Box::new(u_exp)),
-  <id: Ident> "(" <args: Comma<Exp>> ")" => UnaryExp::FuncCall(id, args),
+  // f()
+  <id: Ident> "(" ")" => UnaryExp::FuncCall(id, Vec::new()),
+  // f(a, b, ...)
+  <id: Ident> "(" <a0: Exp> <mut args: ("," <Exp>)*> ")" => {
+    args.insert(0, a0);
+    UnaryExp::FuncCall(id, args)
+  },
 };
 
 PrimaryExp: PrimaryExp = {
   "(" <exp: Exp> ")" => PrimaryExp::Exp(Box::new(exp)),
   <num: Number> => PrimaryExp::Number(num),
-  Ident => PrimaryExp::LVal(<>),
+  LVal => PrimaryExp::LVal(<>),
 };
 
 Number: i32 = <num: IntConst> => <>;
@@ -197,45 +192,50 @@ Decl: Decl = {
 };
 
 ConstDecl: ConstDecl = {
-  "const" <ty: BType> <defs: Comma<ConstDef>> ";" =>
-    ConstDecl { <> },
-};
-
-BType: Type = {
-  "int" => Type::get_i32(),
+  "const" "int" <d0: ConstDef> <mut defs: ("," <ConstDef>)*> ";" => {
+    defs.insert(0, d0);
+    ConstDecl { ty: Type::get_i32(), defs }
+  },
 };
 
 ConstDef: ConstDef = {
-  <id: Ident> "=" <init: ConstInit> => ConstDef{ <> },
+  <id: Ident> <index: ("[" <Exp> "]")?> "=" <init: ConstInit> =>
+    match index {
+      None => ConstDef::ConstExp(id, init),
+      Some(index) => ConstDef::ConstArray(id, index, init),
+    },
 };
 
 ConstInit: ConstInit = {
   Exp => ConstInit::ConstExp(<>),
+  "{" "}" => ConstInit::ConstArray(Vec::new()),
+  "{" <e0: Exp> <mut es: ("," <Exp>)*> "}" => {
+    es.insert(0, e0);
+    ConstInit::ConstArray(es)
+  },
 };
 
 VarDecl: VarDecl = {
-  <ty: BType> <defs: Comma<VarDef>> ";" => 
-    VarDecl { <> },
+  "int" <d0: VarDef> <mut defs: ("," <VarDef>)*> ";" => {
+    defs.insert(0, d0);
+    VarDecl { ty: Type::get_i32(), defs }
+  },
 };
 
 VarDef: VarDef = {
-  <id: Ident> => VarDef{ id: id, init: None },
-  <id: Ident> "=" <init: VarInit> => VarDef{ id, init: Some(init) },
+  <id: Ident> <index: ("[" <Exp> "]")?> <init: ("=" <ValInit>)?> =>
+    match index {
+      None => VarDef::Var(id, init),
+      Some(index) => VarDef::ArrayVar(id, index, init)
+    },
 };
 
-VarInit: VarInit = {
-  Exp => VarInit::VarExp(<>),
-};
-
-Comma<T>: Vec<T> = {
-  <v: (<T> ",")*> <e: T?> => match e {
-    None => v,
-    Some(e) => {
-      let mut v = v;
-      v.push(e);
-      v
-    }
-  }
+ValInit: ValInit = {
+  Exp => ValInit::Exp(<>),
+  "{" <e0: Exp> <mut es: ("," <Exp>)*> "}" => {
+    es.insert(0, e0);
+    ValInit::Array(es)
+  },
 };
 // ---------------------- Decl -------------------------
 

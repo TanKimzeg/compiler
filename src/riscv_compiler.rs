@@ -496,7 +496,7 @@ impl Reg {
             "\tsw {}, %lo({})({})\n", reg.to_string(), name, Reg::A0.to_string()
           ));
         }
-        _ => { unimplemented!("Unsupported global value kind: {:?}", val_data.kind()) },
+        _ => { unreachable!("Unsupported global value kind: {:?}", val_data.kind()) },
       }
     } else {
       let pos = c.get_offset(val);

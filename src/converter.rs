@@ -1,6 +1,7 @@
+use core::panic;
 use std::rc::Rc;
 use crate::ast::*;
-use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder};
+use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder, ValueBuilder};
 use koopa::ir::*;
 
 pub fn ast2ir(ast: &mut Module) -> Program {
@@ -65,35 +66,118 @@ fn traverse_block(block: &mut Block, c: &mut Context) -> BasicBlock {
       BlockItem::Decl(decl) => match decl {
         Decl::ConstDecl(const_decl) => {
           for const_def in &const_decl.defs {
-            let id = &const_def.id;
-            let ConstInit::ConstExp(exp) = &const_def.init;
-            let val = exp.calc(&c.symbols);
-            c.symbols.borrow_mut().declare(
-              id.clone(), 
-              Rc::new(IdentInfo::Const(val))
-            ).unwrap();
+            match const_def {
+              ConstDef::ConstExp(id, exp) => {
+                if let ConstInit::ConstExp(exp) = exp {
+                  let val = exp.calc(&c.symbols);
+                  c.symbols.borrow_mut().declare(
+                    id.clone(), 
+                    Rc::new(IdentInfo::Const(val))
+                  ).unwrap();
+                } else {
+                  panic!("Constant {} initialized with array, expected expression", id);
+                }
+              }
+              ConstDef::ConstArray(id, dim, exps) => {
+                if let ConstInit::ConstArray(exps) = exps {
+                  let d = dim.calc(&c.symbols) as usize;
+                  assert!(exps.len() <= d, "Initializer has more elements than array size");
+                  let mut init_vals: Vec<Value> = exps.iter().map(|e| e.compile(c)).collect();
+                  init_vals.extend(vec![
+                    c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(0); d - exps.len()]);
+                  let const_array = c.program.func_mut(c.curr_func).dfg_mut().new_value().alloc(
+                    Type::get_array(Type::get_i32(), d)
+                  );
+                  c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(const_array).unwrap();
+                  for (i, val) in init_vals.iter().enumerate() {
+                    let idx_val = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(i as i32);
+                    let gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(const_array, idx_val);
+                    c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
+                    let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(*val, gep);
+                    c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
+                  }
+                  c.symbols.borrow_mut().declare(
+                    id.clone(), 
+                    Rc::new(IdentInfo::ConstArray(const_array))
+                  ).unwrap();
+                } else {
+                  panic!("Constant {} initialized with expression, expected array", id);
+                }
+              }
+            }
           }
         },
         Decl::VarDecl(varl_decl) => {
           for var_def in &varl_decl.defs {
-            let id = &var_def.id;
-            let new_var = c.program.func_mut(c.curr_func).dfg_mut().new_value().alloc(Type::get_i32());
-            c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(new_var).unwrap();
-            match &var_def.init {
-              None => {
-                c.symbols.borrow_mut().declare(
-                  id.clone(),
-                  Rc::new(IdentInfo::Var(new_var)),
-                ).unwrap();
-              },
-              Some(VarInit::VarExp(exp)) => {
-                let val = exp.compile(c);
-                let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(val, new_var);
-                c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
-                c.symbols.borrow_mut().declare(
-                  id.clone(),
-                  Rc::new(IdentInfo::Var(new_var)),
-                ).unwrap();
+            match var_def {
+              VarDef::Var(id, init) => {
+                match init {
+                  None => {
+                    let var_val = c.program.func_mut(c.curr_func).dfg_mut().new_value().alloc(varl_decl.ty.clone());
+                    c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(var_val).unwrap();
+                    c.symbols.borrow_mut().declare(
+                      id.clone(),
+                      Rc::new(IdentInfo::Var(var_val)),
+                    ).unwrap();
+                  },
+                  Some(exp) => {
+                    if let ValInit::Exp(exp) = exp {
+                      let val = exp.compile(c);
+                      let new_var = c.program.func_mut(c.curr_func).dfg_mut().new_value().alloc(varl_decl.ty.clone());
+                      c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(new_var).unwrap();
+                      let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(val, new_var);
+                      c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
+                      c.symbols.borrow_mut().declare(
+                        id.clone(),
+                        Rc::new(IdentInfo::Var(new_var)),
+                      ).unwrap();
+                    } else {
+                      panic!("Variable {} initialized with array, expected expression", id);
+                    }
+                  }
+                }
+              }
+              VarDef::ArrayVar(id, dim, init) => {
+                match init {
+                  None => {
+                    let new_array = c.program.func_mut(c.curr_func).dfg_mut().new_value().alloc(
+                      Type::get_array(Type::get_i32(), dim.calc(&c.symbols) as usize)
+                    );
+                    c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(new_array).unwrap();
+                    c.symbols.borrow_mut().declare(
+                      id.clone(),
+                      Rc::new(IdentInfo::MutArray(new_array)),
+                    ).unwrap();
+                  }
+                  Some(exps) => {
+                    if let ValInit::Array(exps) = exps {
+                      let d = dim.calc(&c.symbols) as usize;
+                      assert!(exps.len() <= d, "Initializer has more elements than array size");
+                      let array_val = c.program.func_mut(c.curr_func).dfg_mut().new_value().alloc(
+                        Type::get_array(Type::get_i32(), d)
+                      );
+                      c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(array_val).unwrap();
+                      c.symbols.borrow_mut().declare(
+                        id.clone(),
+                        Rc::new(IdentInfo::MutArray(array_val)),
+                      ).unwrap();
+                      let mut vals: Vec<Value> = exps.iter().map(|e| e.compile(c)).collect();
+                      // 如果初始化列表元素少于数组维度，剩余部分补0
+                      vals.extend(vec![
+                        c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(0); d - exps.len()]);
+                      // 逐元素存储
+                      for (i, val) in vals.iter().enumerate() {
+                        let idx_val = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(i as i32);
+                        let gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(array_val, idx_val);
+                        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
+                        let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(*val, gep);
+                        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
+                      }
+                    } else {
+                      panic!("Array variable {} initialized with expression, expected array", id);
+                    }
+                  }
+                }
               }
             }
           }
@@ -117,13 +201,40 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
       c.bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
       c.program.func_mut(c.curr_func).layout_mut().bbs_mut().push_key_back(c.bb).unwrap();
     },
-    Stmt::LVal(id, exp) => {
+    Stmt::Assign(lval, exp) => {
       let val = exp.compile(c);
-      if let Some(IdentInfo::Var(var)) = c.symbols.borrow().get(id).as_deref() {
-        let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(val, *var);
-        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
-      } else {
-        panic!("Variable '{}' not found in symbol table", id);
+      match lval {
+        LVal::Ident(id) => {
+          let symbols_ref = c.symbols.borrow().get(id);
+          let info = symbols_ref.as_deref().unwrap();
+          match info {
+            IdentInfo::Const(_) => panic!("Cannot assign to constant '{}'", id),
+            IdentInfo::Func(_) => panic!("'{}' is a function", id),
+            IdentInfo::ConstArray(_) => panic!("'{}' is a const array", id),
+            IdentInfo::MutArray(_) => panic!("'{}' is a mutable array", id),
+            IdentInfo::Var(var) => {
+              let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(val, *var);
+              c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
+            }
+          }
+        }
+        LVal::ArrayElem(id, idx_exp) => {
+          let symbols_ref = c.symbols.borrow().get(id);
+          let info = symbols_ref.as_deref().unwrap();
+          match info {
+            IdentInfo::Const(_) => panic!("'{}' is a constant", id),
+            IdentInfo::Func(_) => panic!("'{}' is a function", id),
+            IdentInfo::ConstArray(_) => panic!("'{}' is a const array", id),
+            IdentInfo::Var(_) => { unreachable!("'{}' is a variable", id); }
+            IdentInfo::MutArray(arr) => {
+              let idx_val = idx_exp.compile(c);
+              let gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(*arr, idx_val);
+              c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
+              let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(val, gep);
+              c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
+            }
+          }
+        }
       }
     },
     Stmt::Block(inner_block) => {
