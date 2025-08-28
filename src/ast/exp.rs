@@ -68,9 +68,9 @@ pub enum PrimaryExp {
     LVal(LVal)
 }
 
-pub enum LVal {
-  Ident(String),
-  ArrayElem(String, Box<Exp>),
+pub struct LVal {
+  pub id: String,
+  pub indices: Vec<Exp>,
 }
 
 pub enum UnaryOP {
@@ -154,9 +154,9 @@ impl Compile for PrimaryExp {
                c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(*num)
            },
            PrimaryExp::LVal(lval) => {
-            match lval {
-              LVal::Ident(id) => {
-                if let Some(info) =  c.symbols.borrow().get(id) {
+            match lval.indices.len() {
+              0 => {
+                if let Some(info) =  c.symbols.borrow().get(&lval.id) {
                     match info.as_ref() {
                       IdentInfo::Const(val) => {
                         c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(*val)
@@ -168,29 +168,34 @@ impl Compile for PrimaryExp {
                         load
                       }
                       IdentInfo::Func(_) => panic!("FuncInfo should not appear here"),
-                      IdentInfo::MutArray(_) => panic!("{} is a mutable array, need index to access", id),
-                      IdentInfo::ConstArray(_) => panic!("{} is a constant array, need index to access", id),
+                      IdentInfo::MutArray(_) => panic!("{} is a mutable array, need index to access", lval.id),
+                      IdentInfo::ConstArray(_) => panic!("{} is a constant array, need index to access", lval.id),
                     }
                 } else {
-                    panic!("Symbol '{}' not found in symbol table", id);
+                    panic!("Symbol '{}' not found in symbol table", lval.id);
                 }
               }
-              LVal::ArrayElem(id, index_exp ) => {
+              _ => {
                 let arr = {
-                  if let Some(info) =  c.symbols.borrow().get(id) {
+                  if let Some(info) =  c.symbols.borrow().get(&lval.id) {
                       match info.as_ref() {
                         IdentInfo::MutArray(arr) => *arr,
                         IdentInfo::ConstArray(arr) => *arr,
-                        _ => panic!("{} is not an array", id),
+                        _ => panic!("{} is not an array", lval.id),
                       }
                   } else {
-                      panic!("Symbol '{}' not found in symbol table", id);
+                      panic!("Symbol '{}' not found in symbol table", lval.id);
                   }
                 };
-                let index = index_exp.compile(c);
-                let gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(arr, index);
-                c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
-                let load = c.program.func_mut(c.curr_func).dfg_mut().new_value().load(gep);
+                let index: Vec<Value> = lval.indices.iter().map(
+                  |e| e.compile(c)
+                ).collect();
+                let mut gep = arr;
+                for idx in index.iter() {
+                  gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(gep, *idx);
+                  c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
+                }
+                let load =  c.program.func_mut(c.curr_func).dfg_mut().new_value().load(gep);
                 c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(load).unwrap();
                 load
               }
@@ -496,19 +501,19 @@ impl Calc for PrimaryExp {
       PrimaryExp::Exp(exp) => exp.calc(st),
       PrimaryExp::Number(num) => *num,
       PrimaryExp::LVal(lval) => {
-        match lval {
-          LVal::Ident(id) => {
-            if let Some(val) = st.get(id) {
+        match lval.indices.len() {
+          0 => {
+            if let Some(val) = st.get(&lval.id) {
               if let IdentInfo::Const(v) = val.as_ref() {
                 *v
               } else {
-                panic!("Expected a constant value for identifier '{}'", id);
+                panic!("Expected a constant value for identifier '{}'", lval.id);
               }
             } else {
-                panic!("Symbol '{}' not found in symbol table", id);
+                panic!("Symbol '{}' not found in symbol table", lval.id);
             }
           }
-          LVal::ArrayElem(..) => {
+          _ => {
             unreachable!("Array elements are not supported in constant expressions");
           }
         }

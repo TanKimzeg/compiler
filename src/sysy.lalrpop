@@ -77,8 +77,7 @@ UnmatchedStmt: Stmt = {
 Exp: Exp = <add_exp: LOrExp> => Exp::LOrExp(<>);
 
 LVal: LVal = {
-  <id: Ident> => LVal::Ident(id),
-  <id: Ident> "[" <exp: Exp> "]" => LVal::ArrayElem(id, Box::new(exp)),
+  <id: Ident> <indices: ("[" <Exp> "]")*> => LVal { <> },
 };
 
 LOrExp: LOrExp = {
@@ -199,17 +198,17 @@ ConstDecl: ConstDecl = {
 };
 
 ConstDef: ConstDef = {
-  <id: Ident> <index: ("[" <Exp> "]")?> "=" <init: ConstInit> =>
-    match index {
-      None => ConstDef::ConstExp(id, init),
-      Some(index) => ConstDef::ConstArray(id, index, init),
+  <id: Ident> <dims: ("[" <Exp> "]")*> "=" <init: ConstInit> =>
+    match dims.len() {
+      0 => ConstDef::ConstExp(id, init),
+      _ => ConstDef::ConstArray(Array::<ConstInit>{id, dims, init}),
     },
 };
 
 ConstInit: ConstInit = {
   Exp => ConstInit::ConstExp(<>),
   "{" "}" => ConstInit::ConstArray(Vec::new()),
-  "{" <e0: Exp> <mut es: ("," <Exp>)*> "}" => {
+  "{" <e0: ConstInit> <mut es: ("," <ConstInit>)*> "}" => {
     es.insert(0, e0);
     ConstInit::ConstArray(es)
   },
@@ -223,19 +222,20 @@ VarDecl: VarDecl = {
 };
 
 VarDef: VarDef = {
-  <id: Ident> <index: ("[" <Exp> "]")?> <init: ("=" <ValInit>)?> =>
-    match index {
-      None => VarDef::Var(id, init),
-      Some(index) => VarDef::ArrayVar(id, index, init)
+  <id: Ident> <dims: ("[" <Exp> "]")*> <init: ("=" <ValInit>)?> =>
+    match dims.len() {
+      0 => VarDef::Var(id, init),
+      _ => VarDef::ArrayVar(Array::<Option<ValInit>>{id, dims, init})
     },
 };
 
 ValInit: ValInit = {
   Exp => ValInit::Exp(<>),
-  "{" <e0: Exp> <mut es: ("," <Exp>)*> "}" => {
+  "{" <e0: ValInit> <mut es: ("," <ValInit>)*> "}" => {
     es.insert(0, e0);
     ValInit::Array(es)
   },
+  "{" "}" => ValInit::Array(Vec::new()),
 };
 // ---------------------- Decl -------------------------
 

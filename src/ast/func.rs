@@ -45,20 +45,18 @@ impl Module {
                       panic!("Constant {} initialized with array, expected expression", id);
                     }
                   }
-                  ConstDef::ConstArray(id, dim, exps) => {
-                    if let ConstInit::ConstArray(exps) = exps {
-                      let d = dim.calc(&st) as usize;
-                      assert!(d == exps.len(), "Array constant {} size mismatch: declared size {}, but got {}", id, d, exps.len());
-                      let vals: Vec<i32> = exps.iter().map(|e| e.calc(&st)).collect();
-                      let int_values = vals.iter().map(|v| program.new_value().integer(*v)).collect();
-                      let const_array = program.new_value().aggregate(int_values);
-                      let array_val = program.new_value().global_alloc(const_array);
-                      program.set_value_name(array_val, Some(format!("@{}", id)));
-                      st.borrow_mut().declare(id.clone(),
-                      Rc::new(IdentInfo::ConstArray(array_val))
-                      ).unwrap();
+                  ConstDef::ConstArray(array) => {
+                    if let ConstInit::ConstArray(inits) = &array.init {
+                    let inits = <Array<ConstInit> as ArrayInit<ConstInit>>::flat_fill_global(&array.dims, inits, &st).unwrap();
+                    let dims = array.dims.iter().map(|e| e.calc(&st)).collect::<Vec<i32>>();
+                    let const_array = <Array<ConstInit> as ArrayInit<ConstInit>>::aggregate(inits, &dims, program);
+                    let array_val = program.new_value().global_alloc(const_array);
+                    program.set_value_name(array_val, Some(format!("@{}", array.id)));
+                    st.borrow_mut().declare(array.id.clone(),
+                    Rc::new(IdentInfo::ConstArray(array_val))
+                    ).unwrap();
                     } else {
-                      panic!("Array constant {} initialized with expression, expected array", id);
+                      panic!("Constant array {} initialized with expression, expected array", array.id);
                     }
                   }
                 }
@@ -93,34 +91,34 @@ impl Module {
                       }
                     }
                   }
-                  VarDef::ArrayVar(id, dim, init) => {
-                    match init {
+                  VarDef::ArrayVar(array) => {
+                    match array.init {
                       None => {
                         let new_array = program.new_value().zero_init(
-                          Type::get_array(Type::get_i32(),dim.calc(&st) as usize)
+                          <Array<ValInit> as ArrayInit<ValInit>>::ty(array.dims.iter().map(
+                            |e| e.calc(&st)
+                          ).collect::<Vec<i32>>().as_slice())
                         );
                         let array_val = program.new_value().global_alloc(new_array);
-                        program.set_value_name(array_val, Some(format!("@{}", id)));
+                        program.set_value_name(array_val, Some(format!("@{}", array.id)));
                         st.borrow_mut().declare(
-                          id.clone(),
+                          array.id.clone(),
                           Rc::new(IdentInfo::MutArray(array_val)),
                         ).unwrap();
                       }
-                      Some(exps) => {
-                        if let ValInit::Array(exps) = exps {
-                          let vals  = exps.iter().map( |e| e.calc(&st));
-                          let vals = vals.map(
-                            |v| program.new_value().integer(v)
-                          ).collect();
-                          let init_array = program.new_value().aggregate(vals);
-                          let array_val = program.new_value().global_alloc(init_array);
-                          program.set_value_name(array_val, Some(format!("@{}", id)));
-                          st.borrow_mut().declare(
-                            id.clone(),
-                            Rc::new(IdentInfo::MutArray(array_val)),
-                          ).unwrap();
+                      Some(ref inits) => {
+                        if let ValInit::Array(inits) = &inits {
+                        let vals = <Array<ValInit> as ArrayInit<ValInit>>::flat_fill_global(&array.dims, inits, &st).unwrap();
+                        let dims = array.dims.iter().map(|e| e.calc(&st)).collect::<Vec<i32>>();
+                        let init_array = <Array<ValInit> as ArrayInit<ValInit>>::aggregate(vals, &dims, program);
+                        let array_val = program.new_value().global_alloc(init_array);
+                        program.set_value_name(array_val, Some(format!("@{}", array.id)));
+                        st.borrow_mut().declare(
+                          array.id.clone(),
+                          Rc::new(IdentInfo::MutArray(array_val)),
+                        ).unwrap();
                         } else {
-                          panic!("Array variable {} initialized with expression, expected array", id);
+                          panic!("Array variable {} initialized with expression, expected array", array.id);
                         }
                       }
                     }
@@ -164,7 +162,8 @@ impl Module {
     global_st.borrow_mut().declare("putarray".into(), Rc::new(IdentInfo::Func(putarray))).unwrap();
     global_st.borrow_mut().declare("starttime".into(), Rc::new(IdentInfo::Func(starttime))).unwrap();
     global_st.borrow_mut().declare("stoptime".into(), Rc::new(IdentInfo::Func(stoptime))).unwrap();
-}
+  }
+
 }
 
 pub enum CompUnit {
