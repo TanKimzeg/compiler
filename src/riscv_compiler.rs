@@ -45,9 +45,11 @@ impl<'a> Context<'a> {
       }
     }
     s += a; // 调用超过8个参数的函数,为其参数预留空间.本函数的局部变量在此之上
+    Type::set_ptr_size(4);
     for (&_bb, node) in func_data.layout().bbs() {
       for &inst in node.insts().keys() {
         let ty = func_data.dfg().value(inst).ty();
+        // offset.insert(inst, ty.size());
         if !ty.is_unit() {
           let type_kind = ty.kind();
           match type_kind {
@@ -110,12 +112,7 @@ impl<'a> Context<'a> {
     if self.need_ra {
       asm_text.push_str("\tsw ra, -4(sp)\n");
     }
-    if stack_size > 2048 {
-      asm_text.push_str(format!("\tli t0, {}\n", stack_size).as_str());
-      asm_text.push_str("\tsub sp, sp, t0\n");
-    } else {
-      asm_text.push_str(format!("\taddi sp, sp, -{}\n", stack_size).as_str());
-    }
+    asm_text.push_str(&Reg::add_sp(-(stack_size as i32), Reg::SP));
     asm_text
   }
 
@@ -127,12 +124,7 @@ impl<'a> Context<'a> {
   fn epilogue(&self) -> String {
     let mut asm_text = String::new();
     let stack_size = self.stack_size;
-    if stack_size > 2047 {
-      asm_text.push_str(format!("\tli t0, {}\n", stack_size).as_str());
-      asm_text.push_str("\tadd sp, sp, t0\n");
-    } else {
-      asm_text.push_str(format!("\taddi sp, sp, {}\n", stack_size).as_str());
-    }
+    asm_text.push_str(&Reg::add_sp(stack_size as i32, Reg::SP));
     if self.need_ra {
       asm_text.push_str("\tlw ra, -4(sp)\n");
     }
@@ -172,15 +164,32 @@ pub fn riscv_text(program: Program) -> String {
         let init_val = global_alloc.init();
         asm_text.push_str(&format!("\t.globl {}\n", global_name));
         asm_text.push_str(&format!("{}:\n", global_name));
-        match program.borrow_value(init_val).kind() {
-          ValueKind::Integer(i) => {
-            asm_text.push_str(&format!("\t.word {}\n", i.value()));
+        fn global_to_riscv(value_kind: &ValueKind, init_size: usize,p: &Program) -> String {
+          let mut asm_text = String::new();
+          match value_kind {
+            ValueKind::Integer(i) => {
+              asm_text.push_str(&format!("\t.word {}\n", i.value()));
+            }
+            ValueKind::ZeroInit(_) => {
+              asm_text.push_str(&format!("\t.zero {}\n", init_size));
+            }
+            ValueKind::Aggregate(agg) => {
+              for &elem in agg.elems().iter() {
+                let elem_data = p.borrow_value(elem);
+                let elem_kind = elem_data.kind();
+                asm_text.push_str(&global_to_riscv(elem_kind, init_size,p));
+              }
+            }
+            _ => unimplemented!("Unsupported global init value: {:?}", value_kind),
           }
-          ValueKind::ZeroInit(_) => {
-            asm_text.push_str(&format!("\t.zero {}\n", 4));
-          }
-          _ => unreachable!("Unsupported global init value: {:?}", program.borrow_value(init_val).kind()),
+          asm_text
         }
+        asm_text.push_str(&global_to_riscv(
+          &program.borrow_value(init_val).kind(), 
+          program.borrow_value(init_val).ty().size(), 
+          &program
+        ));
+        
       } else {
         unreachable!("Global value is not GlobalAlloc: {:?}", global_val_data.kind());
       }
@@ -231,6 +240,7 @@ impl ValueKindExt for ValueKind {
         ValueKind::Branch(br) => br.to_riscv(c),
         ValueKind::Jump(j) => j.to_riscv(c),
         ValueKind::Call(call) => call.to_riscv(c),
+        ValueKind::GetElemPtr(gep) => gep.to_riscv(c),
         _ => { unimplemented!("{}",format!("Unsupported expr: {:?}", self)) }
       }; 
       asm_text.push_str(lines.as_str());
@@ -242,7 +252,7 @@ impl ValueKindExt for values::Return {
     let mut asm_text = String::new();
     match self.value() {
     Some(rv) => {
-      asm_text.push_str(&Reg::load_value_to_reg(c, rv, Reg::A0));
+      asm_text.push_str(&Reg::load_val2reg(c, rv, Reg::A0));
     },
     None => { }
     }
@@ -260,8 +270,8 @@ impl ValueKindExt for values::Binary {
     let target_reg = Reg::T0;
     let lhs_reg = Reg::T1;
     let rhs_reg = Reg::T2;
-    asm_text.push_str(&Reg::load_value_to_reg(c, self.lhs(), lhs_reg));
-    asm_text.push_str(&Reg::load_value_to_reg(c, self.rhs(), rhs_reg));
+    asm_text.push_str(&Reg::load_val2reg(c, self.lhs(), lhs_reg));
+    asm_text.push_str(&Reg::load_val2reg(c, self.rhs(), rhs_reg));
     match op {
       BinaryOp::Add => {
         asm_text.push_str(format!("\tadd {}, {}, {}\n", 
@@ -326,7 +336,7 @@ impl ValueKindExt for values::Binary {
       _ => unimplemented!("{}", format!("Unsupported binary operation: {:?}", op)),
 
     }
-    asm_text.push_str(&Reg::store_reg_to_stack(c, target_reg, c.inst.unwrap()));
+    asm_text.push_str(&Reg::store_reg2stack(c, target_reg, c.inst.unwrap()));
     asm_text
   }
 }
@@ -348,23 +358,39 @@ impl ValueKindExt for values::Integer {
 impl ValueKindExt for values::Load {
   fn to_riscv(&self, c: &mut Context) -> String {
     let mut asm_text = String::new();
-    asm_text.push_str(&Reg::load_value_to_reg(c, self.src(), Reg::T0));
-    asm_text.push_str(&Reg::store_reg_to_stack(c, Reg::T0, c.inst.unwrap()));
+    let dest_kind = c.program.func(c.curr_func).dfg().value(self.src()).kind();
+    match dest_kind {
+      ValueKind::GetElemPtr(_) => {
+        asm_text.push_str(&Reg::arr_load2reg(c, self.src(), Reg::T0));
+      }
+      _ => {
+        asm_text.push_str(&Reg::load_val2reg(c, self.src(), Reg::T0));
+      }
+    }
+    asm_text.push_str(&Reg::store_reg2stack(c, Reg::T0, c.inst.unwrap()));
     asm_text
   }
 }
 impl ValueKindExt for values::Store {
   fn to_riscv(&self, c: &mut Context) -> String {
     let mut asm_text = String::new();
-    asm_text.push_str(&Reg::load_value_to_reg(c, self.value(), Reg::T0));
-    asm_text.push_str(&Reg::store_reg_to_stack(c, Reg::T0, self.dest()));
+    asm_text.push_str(&Reg::load_val2reg(c, self.value(), Reg::T0));
+    let dest_kind = c.program.func(c.curr_func).dfg().value(self.dest()).kind();
+    match dest_kind {
+      ValueKind::GetElemPtr(_) => {
+        asm_text.push_str(&Reg::arr_store2stack(c, Reg::T0, self.dest()));
+      }
+      _ => {
+        asm_text.push_str(&Reg::store_reg2stack(c, Reg::T0, self.dest()));
+      }
+    }
     asm_text
   }
 }
 impl ValueKindExt for values::Branch {
   fn to_riscv(&self, c: &mut Context) -> String {
     let mut asm_text = String::new();
-    asm_text.push_str(&Reg::load_value_to_reg(c, self.cond(), Reg::T0));
+    asm_text.push_str(&Reg::load_val2reg(c, self.cond(), Reg::T0));
     let then_bb_name = c.local_bb_label(&self.true_bb());
     asm_text.push_str(format!("\tbnez {}, {}\n", Reg::T0.to_string(), then_bb_name).as_str());
     let else_bb_name = c.local_bb_label(&self.false_bb());
@@ -387,10 +413,10 @@ impl ValueKindExt for values::Call {
     let args = self.args();
     for (i, arg) in args.iter().enumerate() {
       if i > 7 {
-        asm_text.push_str(&Reg::load_value_to_reg(c, *arg, Reg::T0));
-        asm_text.push_str(&Reg::store_reg_to_stack(c, Reg::T0, *arg));
+        asm_text.push_str(&Reg::load_val2reg(c, *arg, Reg::T0));
+        asm_text.push_str(&Reg::store_reg2stack(c, Reg::T0, *arg));
       } else {
-        asm_text.push_str(&Reg::load_value_to_reg(c, *arg, Reg::from_str(&format!("a{}", i))));
+        asm_text.push_str(&Reg::load_val2reg(c, *arg, Reg::from_str(&format!("a{}", i))));
       }
     }
     asm_text.push_str(format!("\tcall {}\n", c.program.func(func).name()
@@ -399,11 +425,57 @@ impl ValueKindExt for values::Call {
     match func_type {
       TypeKind::Function(_, ret_ty) => {
         if !ret_ty.is_unit() {
-          asm_text.push_str(&Reg::store_reg_to_stack(c, Reg::A0, c.inst.unwrap()));
+          asm_text.push_str(&Reg::store_reg2stack(c, Reg::A0, c.inst.unwrap()));
         }
       }
       _ => unreachable!("Callee is not a function, but {}", func_type.to_string()),
     }
+    asm_text
+  }
+}
+impl ValueKindExt for values::GetElemPtr {
+  fn to_riscv(&self, c: &mut Context) -> String {
+    let mut asm_text = String::new();
+    asm_text.push_str(&Reg::load_arr2reg(c, self.src(), Reg::T0)); // 数组首地址
+    asm_text.push_str(&Reg::load_val2reg(c, self.index(), Reg::T1));
+    if self.src().is_global() {
+      let elem_size = {
+        let val_data = c.program.borrow_value(self.src());
+        match val_data.ty().kind() {
+          TypeKind::Array(t, _) => t.size(),
+          TypeKind::Pointer(ptr) => {
+            match ptr.kind() {
+              TypeKind::Array(t, _) => t.size(),
+              _ => unreachable!("GetElemPtr source is pointer but not to array: {}", ptr.kind()),
+            }
+          }
+          _ => panic!("GetElemPtr source is not array or pointer: {}", val_data.ty().kind()),
+        }
+      };
+    asm_text.push_str(&format!("\tli t2, {}\n", 
+      elem_size
+    ));
+    } else {
+      let elem_size = {
+        let val_data = c.program.func(c.curr_func).dfg().value(self.src());
+        match val_data.ty().kind() {
+          TypeKind::Array(t, _) => t.size(),
+          TypeKind::Pointer(ptr) => {
+            match ptr.kind() {
+              TypeKind::Array(t, _) => t.size(),
+              _ => unreachable!("GetElemPtr source is pointer but not to array: {}", ptr.kind()),
+            }
+          }
+          _ => panic!("GetElemPtr source is not array or pointer: {}", val_data.ty().kind()),
+        }
+      };
+      asm_text.push_str(&format!("\tli t2, {}\n", 
+        elem_size
+      ));
+    }
+    asm_text.push_str(&format!("\tmul t1, t1, t2\n")); // 计算偏移量
+    asm_text.push_str(&format!("\tadd t0, t0, t1\n")); // 计算元素地址
+    asm_text.push_str(&Reg::store_reg2stack(c, Reg::T0, c.inst.unwrap())); // 保存结果
     asm_text
   }
 }
@@ -413,6 +485,7 @@ enum Reg {
     A0, A1, A2, A3, A4, A5, A6, A7,
     S0, S1, S2, S3, S4, S5, S6, S7,
     T0, T1, T2, T3, T4, T5, T6, Zero,
+    SP,
 }
 
 impl Display for Reg {
@@ -424,6 +497,7 @@ impl Display for Reg {
             Reg::S4 => "s4", Reg::S5 => "s5", Reg::S6 => "s6", Reg::S7 => "s7",
             Reg::T0 => "t0", Reg::T1 => "t1", Reg::T2 => "t2", Reg::T3 => "t3",
             Reg::T4 => "t4", Reg::T5 => "t5", Reg::T6 => "t6", Reg::Zero => "x0",
+            Reg::SP => "sp",
         };
         write!(f, "{}", reg_str)
    } 
@@ -438,23 +512,31 @@ impl Reg {
       "s4" => Reg::S4, "s5" => Reg::S5, "s6" => Reg::S6, "s7" => Reg::S7,
       "t0" => Reg::T0, "t1" => Reg::T1, "t2" => Reg::T2, "t3" => Reg::T3,
       "t4" => Reg::T4, "t5" => Reg::T5, "t6" => Reg::T6, "x0" => Reg::Zero,
+      "sp" => Reg::SP,
       _ => panic!("Unknown register: {}", s),
     }
   }
-  pub fn load_value_to_reg(c: &mut Context, val: Value, reg: Reg) -> String {
+  pub fn load_val2reg(c: &mut Context, val: Value, reg: Reg) -> String {
     let mut asm_text = String::new();
     if val.is_global() {
       let val_data = c.program.borrow_value(val);
       match val_data.kind() {
-        ValueKind::GlobalAlloc(_) => {
+        ValueKind::GlobalAlloc(global_alloc) => {
+          let alloc_val =  c.program.borrow_value(global_alloc.init());
+          let kind = alloc_val.kind();
           let name = val_data.name().as_ref().unwrap()
             .strip_prefix('@').unwrap();
-          asm_text.push_str(&format!(
-            "\tlui {}, %hi({})\n", reg.to_string(), name
-          ));
-          asm_text.push_str(&format!(
-            "\tlw {}, %lo({})({})\n", reg.to_string(), name, reg.to_string()
-          ));
+          match kind {
+            ValueKind::Integer(_) | ValueKind::ZeroInit(_) => {
+              asm_text.push_str(&format!(
+                "\tlui {}, %hi({})\n", reg, name
+              ));
+              asm_text.push_str(&format!(
+                "\tlw {}, %lo({})({})\n", reg, name, reg
+              ));
+            }
+            _ => unimplemented!("Unsupported global init value kind: {:?}", kind),
+          }
         }
         _ => { unimplemented!("Unsupported global value kind: {:?}", val_data.kind()) },
       }
@@ -462,18 +544,18 @@ impl Reg {
       let val_data = c.program.func(c.curr_func).dfg().value(val);
       match val_data.kind() {
         ValueKind::Integer(i) => {
-          asm_text.push_str(format!("\tli {}, {}\n", reg.to_string(), i.value()).as_str());
+          asm_text.push_str(format!("\tli {}, {}\n", reg, i.value()).as_str());
         },
         _ => {
           let pos = c.get_offset(val);
           match pos {
             Position::Reg(r) => {
               if r != reg {
-                asm_text.push_str(format!("\tmv {}, {}\n", reg.to_string(), r.to_string()).as_str());
+                asm_text.push_str(format!("\tmv {}, {}\n", reg, r).as_str());
               }
             }
             Position::Stack(offset) => {
-              asm_text.push_str(format!("\tlw {}, {}(sp)\n", reg.to_string(), offset).as_str());
+              asm_text.push_str(&Reg::lw_sp(offset as i32, reg));
             }
           }
         }
@@ -481,7 +563,168 @@ impl Reg {
     }
     asm_text
   }
-  pub fn store_reg_to_stack(c: &mut Context, reg: Reg, val: Value) -> String {
+  pub fn load_arr2reg(c: &mut Context, val: Value, reg: Reg) -> String {
+    let mut asm_text = String::new();
+    if val.is_global() {
+      let val_data = c.program.borrow_value(val);
+      match val_data.kind() {
+        ValueKind::GlobalAlloc(global_alloc) => {
+          let alloc_val =  c.program.borrow_value(global_alloc.init());
+          let kind = alloc_val.kind();
+          let name = val_data.name().as_ref().unwrap()
+            .strip_prefix('@').unwrap();
+          match kind {
+            ValueKind::Aggregate(_) | ValueKind::ZeroInit(_) => {
+              asm_text.push_str(&format!(
+                "\tlui {}, %hi({})\n", reg, name
+              )); // 全局变量的地址存放在 reg 寄存器中
+              asm_text.push_str(&format!(
+                "\taddi {}, {}, %lo({})\n", reg, reg, name
+              )); // 计算全局变量的地址
+            }
+            _ => unimplemented!("Unsupported global init value kind: {:?}", kind),
+          }
+        }
+        _ => { unimplemented!("Unsupported global value kind: {:?}", val_data.kind()) },
+      }
+    } else {
+      let pos = c.get_offset(val);
+      match pos {
+        Position::Reg(r) => {
+          if r != reg {
+            asm_text.push_str(format!("\tmv {}, {}\n", reg, r).as_str());
+          }
+        }
+        Position::Stack(offset) => {
+          let src_kind = c.program.func(c.curr_func).dfg().value(val).kind();
+          match src_kind {
+            ValueKind::Alloc(_) => {
+              asm_text.push_str(&Reg::add_sp(offset as i32, reg));
+            }
+            ValueKind::GetElemPtr(_) => {
+              asm_text.push_str(&Reg::lw_sp(offset as i32, Reg::A0));
+            }
+            _ => unimplemented!("Unsupported source kind for array load: {:?}", src_kind),
+          }
+        }
+      }
+    }
+    asm_text
+  }
+  pub fn store_reg2stack(c: &mut Context, reg: Reg, val: Value) -> String {
+    let mut asm_text = String::new();
+    if val.is_global() {
+      let val_data = c.program.borrow_value(val);
+      match val_data.kind() {
+        ValueKind::GlobalAlloc(global_alloc) => {
+          let alloc_val =  c.program.borrow_value(global_alloc.init());
+          let kind = alloc_val.kind();
+          let name = val_data.name().as_ref().unwrap()
+            .strip_prefix('@').unwrap();
+          match kind {
+            ValueKind::Integer(_) | ValueKind::ZeroInit(_)=> {
+              asm_text.push_str(&format!(
+                "\tlui {}, %hi({})\n", Reg::A0, name
+              )); // 全局变量的地址存放在 a0 寄存器中
+              asm_text.push_str(&format!(
+                "\tsw {}, %lo({})({})\n", reg, name, Reg::A0
+              ));
+            }
+            _ => unimplemented!("Unsupported global init value kind: {:?}", val_data.kind()),
+          }
+        }
+        _ => { unimplemented!("Unsupported global value kind: {:?}", val_data.kind()) },
+      }
+    } else {
+      let pos = c.get_offset(val);
+      match pos {
+        Position::Reg(r) => {
+          asm_text.push_str(&format!("\tmv {}, {}\n", r, reg));
+        }
+        Position::Stack(offset) => {
+          asm_text.push_str(&Reg::sw_sp(offset as i32, reg));
+        }
+      }
+    }
+    asm_text
+  }
+
+  pub fn add_sp(offset: i32, target: Reg) -> String {
+    let mut asm_text = String::new();
+    if offset > 2047 || offset < -2048 {
+      asm_text.push_str(&format!("\tli {}, {}\n", Reg::A1, offset));
+      asm_text.push_str(&format!("\tadd {}, sp, {}\n", target, Reg::A1));
+    } else {
+      asm_text.push_str(&format!("\taddi {}, sp, {}\n", target, offset));
+    }
+    asm_text
+  }
+
+  pub fn lw_sp(offset: i32, target: Reg) -> String {
+    let mut asm_text = String::new();
+    if offset > 2047 || offset < -2048 {
+      asm_text.push_str(&format!("\tli {}, {}\n", Reg::A1, offset));
+      asm_text.push_str(&format!("\tadd {}, sp, {}\n", Reg::A1, Reg::A1));
+      asm_text.push_str(&format!("\tlw {}, 0({})\n", target, Reg::A1));
+    } else {
+      asm_text.push_str(&format!("\tlw {}, {}(sp)\n", target, offset));
+    }
+    asm_text
+  }
+
+  pub fn sw_sp(offset: i32, target: Reg) -> String {
+    let mut asm_text = String::new();
+    if offset > 2047 || offset < -2048 {
+      asm_text.push_str(&format!("\tli {}, {}\n", Reg::A1, offset));
+      asm_text.push_str(&format!("\tadd {}, sp, {}\n", Reg::A1, Reg::A1));
+      asm_text.push_str(&format!("\tsw {}, 0({})\n", target, Reg::A1));
+    } else {
+      asm_text.push_str(&format!("\tsw {}, {}(sp)\n", target, offset));
+    }
+    asm_text
+  }
+  pub fn arr_load2reg(c: &mut Context, src: Value, target: Reg) -> String {
+    let mut asm_text = String::new();
+    if src.is_global() {
+      let val_data = c.program.borrow_value(src);
+      match val_data.kind() {
+        ValueKind::GlobalAlloc(global_alloc) => {
+          let alloc_val =  c.program.borrow_value(global_alloc.init());
+          let kind = alloc_val.kind();
+          let name = val_data.name().as_ref().unwrap()
+            .strip_prefix('@').unwrap();
+          match kind {
+            ValueKind::Aggregate(_) => {
+              asm_text.push_str(&format!(
+                "\tlui {}, %hi({})\n", Reg::A0, name
+              )); // 全局变量的地址存放在 a0 寄存器中
+              asm_text.push_str(&format!(
+                "\taddi {}, {}, %lo({})\n", target, Reg::A0, name
+              )); // 计算全局变量的地址
+            }
+            _ => unimplemented!("Unsupported global init value kind: {:?}", kind),
+          }
+        }
+        _ => { unimplemented!("Unsupported global value kind: {:?}", val_data.kind()) },
+      }
+    } else {
+      let pos = c.get_offset(src);
+      match pos {
+        Position::Reg(r) => {
+          if r != target {
+            asm_text.push_str(format!("\tmv {}, {}\n", r, target).as_str());
+          }
+        }
+        Position::Stack(offset) => {
+          asm_text.push_str(&Reg::lw_sp(offset as i32, Reg::A0));
+          asm_text.push_str(&format!("\tlw {}, 0({})\n", target, Reg::A0));
+        }
+      }
+    }
+    asm_text
+  }
+
+  pub fn arr_store2stack(c: &mut Context, src: Reg, val: Value) -> String {
     let mut asm_text = String::new();
     if val.is_global() {
       let val_data = c.program.borrow_value(val);
@@ -490,22 +733,27 @@ impl Reg {
           let name = val_data.name().as_ref().unwrap()
             .strip_prefix('@').unwrap();
           asm_text.push_str(&format!(
-            "\tlui {}, %hi({})\n", Reg::A0.to_string(), name
+            "\tlui {}, %hi({})\n", Reg::A0, name
           )); // 全局变量的地址存放在 a0 寄存器中
           asm_text.push_str(&format!(
-            "\tsw {}, %lo({})({})\n", reg.to_string(), name, Reg::A0.to_string()
+            "\taddi {}, {}, %lo({})\n", Reg::A0, Reg::A0, name
+          )); // 计算全局变量的地址
+          asm_text.push_str(&format!(
+            "\tsw {}, 0({})\n", src, Reg::A0
           ));
         }
-        _ => { unreachable!("Unsupported global value kind: {:?}", val_data.kind()) },
+        _ => { unimplemented!("Unsupported global value kind: {:?}", val_data.kind()) },
       }
     } else {
       let pos = c.get_offset(val);
       match pos {
         Position::Reg(r) => {
-          asm_text.push_str(&format!("\tmv {}, {}\n", r.to_string(), reg.to_string()));
+          asm_text.push_str(&format!("\tlw {}, 0({})\n", Reg::A0, r));
+          asm_text.push_str(&format!("\tmv {}, {}\n", r, Reg::A0));
         }
         Position::Stack(offset) => {
-          asm_text.push_str(format!("\tsw {}, {}(sp)\n", reg.to_string(), offset).as_str());
+          asm_text.push_str(&Reg::lw_sp(offset as i32, Reg::A0));
+          asm_text.push_str(&format!("\tsw {}, 0({})\n", src, Reg::A0));
         }
       }
     }
