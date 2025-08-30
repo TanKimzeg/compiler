@@ -34,8 +34,10 @@ FuncHead: (Type, String) = {
   "void" <id: Ident> "(" => (Type::get_unit(), id),
 }
 
-FuncFParam: (String, Type) = {
-  "int" <id: Ident> => (id, Type::get_i32()),
+FuncFParam: FuncFParam = {
+  "int" <id: Ident> <dims: ("[" "]" <("[" <Exp> "]")*>)?> => {
+    FuncFParam { id, dims }
+  }
 }
 
 

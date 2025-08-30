@@ -70,8 +70,9 @@ pub enum IdentInfo {
 	Const(i32),
 	Var(Value),
 	Func(Function),
-	ConstArray(Value),
-	MutArray(Value),
+	ConstArray(Value, Vec<i32>),
+	MutArray(Value, Vec<i32>),
+	Ptr(Value),
 }
 
 pub struct Block {

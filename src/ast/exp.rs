@@ -168,36 +168,85 @@ impl Compile for PrimaryExp {
                         load
                       }
                       IdentInfo::Func(_) => panic!("FuncInfo should not appear here"),
-                      IdentInfo::MutArray(_) => panic!("{} is a mutable array, need index to access", lval.id),
-                      IdentInfo::ConstArray(_) => panic!("{} is a constant array, need index to access", lval.id),
+                      IdentInfo::MutArray(arr, _) | IdentInfo::ConstArray(arr, _) => {
+                        // 传递数组参数相当于传递其第一个元素的地址
+                        let zero = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(0);
+                        let load = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(*arr, zero);
+                        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(load).unwrap();
+                        load
+                      }
+                      IdentInfo::Ptr(ptr) => {
+                        let load = c.program.func_mut(c.curr_func).dfg_mut().new_value().load(*ptr);
+                        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(load).unwrap();
+                        load
+                      }
                     }
                 } else {
                     panic!("Symbol '{}' not found in symbol table", lval.id);
                 }
               }
               _ => {
-                let arr = {
-                  if let Some(info) =  c.symbols.borrow().get(&lval.id) {
-                      match info.as_ref() {
-                        IdentInfo::MutArray(arr) => *arr,
-                        IdentInfo::ConstArray(arr) => *arr,
-                        _ => panic!("{} is not an array", lval.id),
-                      }
-                  } else {
-                      panic!("Symbol '{}' not found in symbol table", lval.id);
-                  }
-                };
                 let index: Vec<Value> = lval.indices.iter().map(
                   |e| e.compile(c)
                 ).collect();
-                let mut gep = arr;
-                for idx in index.iter() {
-                  gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(gep, *idx);
-                  c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
+                if let Some(info) =  c.symbols.borrow().get(&lval.id) {
+                    match info.as_ref() {
+                      IdentInfo::MutArray(arr, dims) | IdentInfo::ConstArray(arr, dims) => {
+                        let mut gep = *arr;
+                        for idx in index.iter() {
+                          gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(gep, *idx);
+                          c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
+                        }
+                        if index.len() == dims.len() {
+                          let load =  c.program.func_mut(c.curr_func).dfg_mut().new_value().load(gep);
+                          c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(load).unwrap();
+                          load
+                        } else {
+                          if let TypeKind::Pointer(ptr) = c.program.func(c.curr_func).dfg()
+                            .value(gep).ty().kind() {
+                            match ptr.kind() { TypeKind::Array(..) => {
+                              // 传递数组参数相当于传递其第一个元素的地址
+                              let zero = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(0);
+                              gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(gep, zero);
+                              c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
+                              }
+                            _ => unreachable!("{}", ptr.kind())
+                            }
+                          }
+                          gep
+                        }
+                      },
+                      IdentInfo::Ptr(ptr) => {
+                        let ptr = c.program.func_mut(c.curr_func).dfg_mut().new_value().load(*ptr);
+                        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(ptr).unwrap();
+                        let mut gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_ptr(ptr, index[0]);
+                        c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
+                        for idx in index.iter().skip(1) {
+                          gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(gep, *idx);
+                          c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
+                        }
+                        if let TypeKind::Pointer(ptr) = c.program.func(c.curr_func).dfg()
+                          .value(gep).ty().kind() {
+                          match ptr.kind() { TypeKind::Array(..) => {
+                            // 传递数组参数相当于传递其第一个元素的地址
+                            let zero = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(0);
+                            gep = c.program.func_mut(c.curr_func).dfg_mut().new_value().get_elem_ptr(gep, zero);
+                            c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(gep).unwrap();
+                            }
+                            _ => {
+                              let load =  c.program.func_mut(c.curr_func).dfg_mut().new_value().load(gep);
+                              c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(load).unwrap();
+                              return load;
+                            }
+                          }
+                        }
+                        gep
+                      }
+                      _ => panic!("{} is not an array or pointer", lval.id),
+                    }
+                } else {
+                    panic!("Symbol '{}' not found in symbol table", lval.id);
                 }
-                let load =  c.program.func_mut(c.curr_func).dfg_mut().new_value().load(gep);
-                c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(load).unwrap();
-                load
               }
             }
           }

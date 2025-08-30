@@ -18,10 +18,22 @@ impl Module {
 					let func = program.new_func(FunctionData::with_param_names(
 						format!("@{}", func_def.id),
 						func_def.params.iter().
-						map(|(id, ty)| {
-							let mut id = id.clone();
+						map(|param| {
+							let mut id = param.id.clone();
 							id.insert(0, '@');
-							(Some(id.to_string()), ty.clone())
+              let ty = {
+                if let Some(dims) = &param.dims {
+                  Type::get_pointer(
+                    <Array<ValInit> as ArrayInit<ValInit>>::ty(dims.iter()
+                    .map(|e| e.calc(&st))
+                    .collect::<Vec<i32>>()
+                    .as_slice())
+                  )
+                } else {
+                  Type::get_i32()
+                }
+              };
+							(Some(id.to_string()), ty)
 						}).collect(),
 						func_def.func_type.clone(),
 					));
@@ -53,7 +65,7 @@ impl Module {
                     let array_val = program.new_value().global_alloc(const_array);
                     program.set_value_name(array_val, Some(format!("@{}", array.id)));
                     st.borrow_mut().declare(array.id.clone(),
-                    Rc::new(IdentInfo::ConstArray(array_val))
+                    Rc::new(IdentInfo::ConstArray(array_val, dims))
                     ).unwrap();
                     } else {
                       panic!("Constant array {} initialized with expression, expected array", array.id);
@@ -94,16 +106,15 @@ impl Module {
                   VarDef::ArrayVar(array) => {
                     match array.init {
                       None => {
+                        let dims = array.dims.iter().map(|e| e.calc(&st)).collect::<Vec<i32>>();
                         let new_array = program.new_value().zero_init(
-                          <Array<ValInit> as ArrayInit<ValInit>>::ty(array.dims.iter().map(
-                            |e| e.calc(&st)
-                          ).collect::<Vec<i32>>().as_slice())
+                          <Array<ValInit> as ArrayInit<ValInit>>::ty(&dims)
                         );
                         let array_val = program.new_value().global_alloc(new_array);
                         program.set_value_name(array_val, Some(format!("@{}", array.id)));
                         st.borrow_mut().declare(
                           array.id.clone(),
-                          Rc::new(IdentInfo::MutArray(array_val)),
+                          Rc::new(IdentInfo::MutArray(array_val, dims)),
                         ).unwrap();
                       }
                       Some(ref inits) => {
@@ -115,7 +126,7 @@ impl Module {
                         program.set_value_name(array_val, Some(format!("@{}", array.id)));
                         st.borrow_mut().declare(
                           array.id.clone(),
-                          Rc::new(IdentInfo::MutArray(array_val)),
+                          Rc::new(IdentInfo::MutArray(array_val, dims)),
                         ).unwrap();
                         } else {
                           panic!("Array variable {} initialized with expression, expected array", array.id);
@@ -174,6 +185,11 @@ pub enum CompUnit {
 pub struct FuncDef {
   pub func_type: Type,
   pub id: String,
-  pub params: Vec<(String, Type)>,
+  pub params: Vec<FuncFParam>,
   pub block: Block,
+}
+
+pub struct FuncFParam {
+  pub id: String,
+  pub dims: Option<Vec<Exp>>,
 }
