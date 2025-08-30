@@ -51,18 +51,18 @@ impl<'a> Context<'a> {
         let ty = func_data.dfg().value(inst).ty();
         // offset.insert(inst, ty.size());
         if !ty.is_unit() {
-          let type_kind = ty.kind();
-          match type_kind {
-            TypeKind::Int32 => { 
-              offset.insert(inst, Position::Stack(s)); 
-              s += 4;
-            },
-            TypeKind::Pointer(_) => { 
-              offset.insert(inst, Position::Stack(s)); 
-              s += 4; 
-            },
-            _ => unimplemented!("Unsupported type for stack allocation: {}", type_kind.to_string()),
+          fn get_size(ty: &Type) -> usize {
+            match ty.kind() {
+              TypeKind::Int32 => 4,
+              TypeKind::Unit => 0,
+              TypeKind::Array(t, len) => t.size() * len,
+              TypeKind::Pointer(ptr) => ptr.size(),
+              TypeKind::Function(_, ret_ty) => get_size(ret_ty),
+            }
           }
+          let size = get_size(ty);
+          offset.insert(inst, Position::Stack(s));
+          s += size;
         }
       }
     }
@@ -241,6 +241,7 @@ impl ValueKindExt for ValueKind {
         ValueKind::Jump(j) => j.to_riscv(c),
         ValueKind::Call(call) => call.to_riscv(c),
         ValueKind::GetElemPtr(gep) => gep.to_riscv(c),
+        ValueKind::GetPtr(ptr) => ptr.to_riscv(c),
         _ => { unimplemented!("{}",format!("Unsupported expr: {:?}", self)) }
       }; 
       asm_text.push_str(lines.as_str());
@@ -358,9 +359,14 @@ impl ValueKindExt for values::Integer {
 impl ValueKindExt for values::Load {
   fn to_riscv(&self, c: &mut Context) -> String {
     let mut asm_text = String::new();
-    let dest_kind = c.program.func(c.curr_func).dfg().value(self.src()).kind();
-    match dest_kind {
-      ValueKind::GetElemPtr(_) => {
+    let src_kind = if self.src().is_global() {
+      let src_data = c.program.borrow_value(self.src());
+      src_data.kind().clone()
+    } else {
+      c.program.func(c.curr_func).dfg().value(self.src()).kind().clone()
+    };
+    match src_kind {
+      ValueKind::GetElemPtr(_) | ValueKind::GetPtr(_) => {
         asm_text.push_str(&Reg::arr_load2reg(c, self.src(), Reg::T0));
       }
       _ => {
@@ -375,9 +381,14 @@ impl ValueKindExt for values::Store {
   fn to_riscv(&self, c: &mut Context) -> String {
     let mut asm_text = String::new();
     asm_text.push_str(&Reg::load_val2reg(c, self.value(), Reg::T0));
-    let dest_kind = c.program.func(c.curr_func).dfg().value(self.dest()).kind();
+    let dest_kind = if self.dest().is_global() {
+      let dest_data = c.program.borrow_value(self.dest());
+      dest_data.kind().clone()
+    } else {
+      c.program.func(c.curr_func).dfg().value(self.dest()).kind().clone()
+    };
     match dest_kind {
-      ValueKind::GetElemPtr(_) => {
+      ValueKind::GetElemPtr(_) | ValueKind::GetPtr(_) => {
         asm_text.push_str(&Reg::arr_store2stack(c, Reg::T0, self.dest()));
       }
       _ => {
@@ -442,7 +453,6 @@ impl ValueKindExt for values::GetElemPtr {
       let elem_size = {
         let val_data = c.program.borrow_value(self.src());
         match val_data.ty().kind() {
-          TypeKind::Array(t, _) => t.size(),
           TypeKind::Pointer(ptr) => {
             match ptr.kind() {
               TypeKind::Array(t, _) => t.size(),
@@ -459,7 +469,6 @@ impl ValueKindExt for values::GetElemPtr {
       let elem_size = {
         let val_data = c.program.func(c.curr_func).dfg().value(self.src());
         match val_data.ty().kind() {
-          TypeKind::Array(t, _) => t.size(),
           TypeKind::Pointer(ptr) => {
             match ptr.kind() {
               TypeKind::Array(t, _) => t.size(),
@@ -467,6 +476,40 @@ impl ValueKindExt for values::GetElemPtr {
             }
           }
           _ => panic!("GetElemPtr source is not array or pointer: {}", val_data.ty().kind()),
+        }
+      };
+      asm_text.push_str(&format!("\tli t2, {}\n", 
+        elem_size
+      ));
+    }
+    asm_text.push_str(&format!("\tmul t1, t1, t2\n")); // 计算偏移量
+    asm_text.push_str(&format!("\tadd t0, t0, t1\n")); // 计算元素地址
+    asm_text.push_str(&Reg::store_reg2stack(c, Reg::T0, c.inst.unwrap())); // 保存结果
+    asm_text
+  }
+}
+impl ValueKindExt for values::GetPtr {
+  fn to_riscv(&self, c: &mut Context) -> String {
+    let mut asm_text = String::new();
+    asm_text.push_str(&Reg::load_arr2reg(c, self.src(), Reg::T0)); // 数组首地址
+    asm_text.push_str(&Reg::load_val2reg(c, self.index(), Reg::T1));
+    if self.src().is_global() {
+      let elem_size = {
+        let val_data = c.program.borrow_value(self.src());
+        match val_data.ty().kind() {
+          TypeKind::Pointer(ptr) => { ptr.size() }
+          _ => panic!("GetElemPtr source is not array or pointer: {}", val_data.ty().kind()),
+        }
+      };
+    asm_text.push_str(&format!("\tli t2, {}\n", 
+      elem_size
+    ));
+    } else {
+      let elem_size = {
+        let val_data = c.program.func(c.curr_func).dfg().value(self.src());
+        match val_data.ty().kind() {
+          TypeKind::Pointer(ptr) => { ptr.size() }
+          _ => panic!("GetPtr source is not array or pointer: {}", val_data.ty().kind()),
         }
       };
       asm_text.push_str(&format!("\tli t2, {}\n", 
@@ -601,8 +644,11 @@ impl Reg {
             ValueKind::Alloc(_) => {
               asm_text.push_str(&Reg::add_sp(offset as i32, reg));
             }
-            ValueKind::GetElemPtr(_) => {
-              asm_text.push_str(&Reg::lw_sp(offset as i32, Reg::A0));
+            ValueKind::GetElemPtr(_) | ValueKind::GetPtr(_) => {
+              asm_text.push_str(&Reg::lw_sp(offset as i32, reg));
+            }
+            ValueKind::Load(_) => {
+              asm_text.push_str(&Reg::lw_sp(offset as i32, reg));
             }
             _ => unimplemented!("Unsupported source kind for array load: {:?}", src_kind),
           }
@@ -624,10 +670,10 @@ impl Reg {
           match kind {
             ValueKind::Integer(_) | ValueKind::ZeroInit(_)=> {
               asm_text.push_str(&format!(
-                "\tlui {}, %hi({})\n", Reg::A0, name
-              )); // 全局变量的地址存放在 a0 寄存器中
+                "\tlui {}, %hi({})\n", Reg::S1, name
+              )); // 全局变量的地址存放在 s1 寄存器中
               asm_text.push_str(&format!(
-                "\tsw {}, %lo({})({})\n", reg, name, Reg::A0
+                "\tsw {}, %lo({})({})\n", reg, name, Reg::S1
               ));
             }
             _ => unimplemented!("Unsupported global init value kind: {:?}", val_data.kind()),
@@ -652,8 +698,8 @@ impl Reg {
   pub fn add_sp(offset: i32, target: Reg) -> String {
     let mut asm_text = String::new();
     if offset > 2047 || offset < -2048 {
-      asm_text.push_str(&format!("\tli {}, {}\n", Reg::A1, offset));
-      asm_text.push_str(&format!("\tadd {}, sp, {}\n", target, Reg::A1));
+      asm_text.push_str(&format!("\tli {}, {}\n", Reg::S2, offset));
+      asm_text.push_str(&format!("\tadd {}, sp, {}\n", target, Reg::S2));
     } else {
       asm_text.push_str(&format!("\taddi {}, sp, {}\n", target, offset));
     }
@@ -663,9 +709,9 @@ impl Reg {
   pub fn lw_sp(offset: i32, target: Reg) -> String {
     let mut asm_text = String::new();
     if offset > 2047 || offset < -2048 {
-      asm_text.push_str(&format!("\tli {}, {}\n", Reg::A1, offset));
-      asm_text.push_str(&format!("\tadd {}, sp, {}\n", Reg::A1, Reg::A1));
-      asm_text.push_str(&format!("\tlw {}, 0({})\n", target, Reg::A1));
+      asm_text.push_str(&format!("\tli {}, {}\n", Reg::S2, offset));
+      asm_text.push_str(&format!("\tadd {}, sp, {}\n", Reg::S2, Reg::S2));
+      asm_text.push_str(&format!("\tlw {}, 0({})\n", target, Reg::S2));
     } else {
       asm_text.push_str(&format!("\tlw {}, {}(sp)\n", target, offset));
     }
@@ -675,9 +721,9 @@ impl Reg {
   pub fn sw_sp(offset: i32, target: Reg) -> String {
     let mut asm_text = String::new();
     if offset > 2047 || offset < -2048 {
-      asm_text.push_str(&format!("\tli {}, {}\n", Reg::A1, offset));
-      asm_text.push_str(&format!("\tadd {}, sp, {}\n", Reg::A1, Reg::A1));
-      asm_text.push_str(&format!("\tsw {}, 0({})\n", target, Reg::A1));
+      asm_text.push_str(&format!("\tli {}, {}\n", Reg::S2, offset));
+      asm_text.push_str(&format!("\tadd {}, sp, {}\n", Reg::S2, Reg::S2));
+      asm_text.push_str(&format!("\tsw {}, 0({})\n", target, Reg::S2));
     } else {
       asm_text.push_str(&format!("\tsw {}, {}(sp)\n", target, offset));
     }
@@ -696,10 +742,10 @@ impl Reg {
           match kind {
             ValueKind::Aggregate(_) => {
               asm_text.push_str(&format!(
-                "\tlui {}, %hi({})\n", Reg::A0, name
-              )); // 全局变量的地址存放在 a0 寄存器中
+                "\tlui {}, %hi({})\n", Reg::S1, name
+              )); // 全局变量的地址存放在 s1 寄存器中
               asm_text.push_str(&format!(
-                "\taddi {}, {}, %lo({})\n", target, Reg::A0, name
+                "\taddi {}, {}, %lo({})\n", target, Reg::S1, name
               )); // 计算全局变量的地址
             }
             _ => unimplemented!("Unsupported global init value kind: {:?}", kind),
@@ -716,8 +762,8 @@ impl Reg {
           }
         }
         Position::Stack(offset) => {
-          asm_text.push_str(&Reg::lw_sp(offset as i32, Reg::A0));
-          asm_text.push_str(&format!("\tlw {}, 0({})\n", target, Reg::A0));
+          asm_text.push_str(&Reg::lw_sp(offset as i32, Reg::S1));
+          asm_text.push_str(&format!("\tlw {}, 0({})\n", target, Reg::S1));
         }
       }
     }
@@ -733,13 +779,13 @@ impl Reg {
           let name = val_data.name().as_ref().unwrap()
             .strip_prefix('@').unwrap();
           asm_text.push_str(&format!(
-            "\tlui {}, %hi({})\n", Reg::A0, name
-          )); // 全局变量的地址存放在 a0 寄存器中
+            "\tlui {}, %hi({})\n", Reg::S1, name
+          )); // 全局变量的地址存放在 s1 寄存器中
           asm_text.push_str(&format!(
-            "\taddi {}, {}, %lo({})\n", Reg::A0, Reg::A0, name
+            "\taddi {}, {}, %lo({})\n", Reg::S1, Reg::S1, name
           )); // 计算全局变量的地址
           asm_text.push_str(&format!(
-            "\tsw {}, 0({})\n", src, Reg::A0
+            "\tsw {}, 0({})\n", src, Reg::S1
           ));
         }
         _ => { unimplemented!("Unsupported global value kind: {:?}", val_data.kind()) },
@@ -748,12 +794,12 @@ impl Reg {
       let pos = c.get_offset(val);
       match pos {
         Position::Reg(r) => {
-          asm_text.push_str(&format!("\tlw {}, 0({})\n", Reg::A0, r));
-          asm_text.push_str(&format!("\tmv {}, {}\n", r, Reg::A0));
+          asm_text.push_str(&format!("\tlw {}, 0({})\n", Reg::S1, r));
+          asm_text.push_str(&format!("\tmv {}, {}\n", r, Reg::S1));
         }
         Position::Stack(offset) => {
-          asm_text.push_str(&Reg::lw_sp(offset as i32, Reg::A0));
-          asm_text.push_str(&format!("\tsw {}, 0({})\n", src, Reg::A0));
+          asm_text.push_str(&Reg::lw_sp(offset as i32, Reg::S1));
+          asm_text.push_str(&format!("\tsw {}, 0({})\n", src, Reg::S1));
         }
       }
     }
