@@ -6,7 +6,6 @@ use compiler::{ast::*, ast2ir};
 use compiler::{koopa_text, riscv_text};
 
 // 引用 lalrpop 生成的解析器
-// 因为我们刚刚创建了 sysy.lalrpop, 所以模块名是 sysy
 lalrpop_mod!(sysy);
 
 fn main() -> Result<()> {
@@ -37,7 +36,10 @@ fn main() -> Result<()> {
       // 生成 RISC-V 汇编代码
       riscv_text(program)
     }
-
+    "-perf" => {
+      // 生成 RISC-V 汇编代码, 性能优化未实现
+      riscv_text(program)
+    }
     _ => {
       panic!("Unknown mode: {}", mode);
     }
