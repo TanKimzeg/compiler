@@ -49,7 +49,6 @@ impl<'a> Context<'a> {
     for (&_bb, node) in func_data.layout().bbs() {
       for &inst in node.insts().keys() {
         let ty = func_data.dfg().value(inst).ty();
-        // offset.insert(inst, ty.size());
         if !ty.is_unit() {
           fn get_size(ty: &Type) -> usize {
             match ty.kind() {
@@ -80,17 +79,20 @@ impl<'a> Context<'a> {
         let val_data = func_data.dfg().value(inst);
         let val_kind = val_data.kind();
         if let ValueKind::Call(call) = val_kind {
-          let mut a_ = 0;
-          for (i, &arg) in call.args().iter().enumerate() {
-            if i > 7 {
-              // 超过8个参数,在调用者的栈上，所以超出了本函数的栈帧
-              offset.insert(arg, Position::Stack(a_));
-              a_ += 4;
-            } else {
-              offset.insert(arg, Position::Reg(Reg::from_str(format!("a{}", i).as_str())));
+          let args = call.args();
+          let mid = std::cmp::max(0, args.len() as i32 - 8)*4;
+          for (i, &arg) in args.iter().take(8).enumerate() {
+            if offset.contains_key(&arg) {
+              continue;
             }
+            offset.insert(arg, Position::Stack(mid as usize+i*4));
           }
-          assert!(a_ <= a, "Argument stack space overflow");
+          for (i, &arg) in args.iter().skip(8).enumerate() {
+            if offset.contains_key(&arg) {
+              continue;
+            }
+            offset.insert(arg, Position::Stack(i*4));
+          }
         }
       }
     }
@@ -425,7 +427,8 @@ impl ValueKindExt for values::Call {
     for (i, arg) in args.iter().enumerate() {
       if i > 7 {
         asm_text.push_str(&Reg::load_val2reg(c, *arg, Reg::T0));
-        asm_text.push_str(&Reg::store_reg2stack(c, Reg::T0, *arg));
+        asm_text.push_str(&format!("\tsw {}, {}(sp)\n", 
+          Reg::T0.to_string(), (i-8)*4));
       } else {
         asm_text.push_str(&Reg::load_val2reg(c, *arg, Reg::from_str(&format!("a{}", i))));
       }
@@ -685,7 +688,7 @@ impl Reg {
       let pos = c.get_offset(val);
       match pos {
         Position::Reg(r) => {
-          asm_text.push_str(&format!("\tmv {}, {}\n", r, reg));
+          asm_text.push_str(&format!("\tmv {}, {}\n", reg, r));
         }
         Position::Stack(offset) => {
           asm_text.push_str(&Reg::sw_sp(offset as i32, reg));
@@ -758,7 +761,7 @@ impl Reg {
       match pos {
         Position::Reg(r) => {
           if r != target {
-            asm_text.push_str(format!("\tmv {}, {}\n", r, target).as_str());
+            asm_text.push_str(format!("\tmv {}, {}\n", target, r).as_str());
           }
         }
         Position::Stack(offset) => {
