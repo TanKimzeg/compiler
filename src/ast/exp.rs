@@ -405,12 +405,12 @@ where T: Compile, S: Compile {
           c.bb = then_bb;
           let rhs = self.rhs.compile(c);
           let res = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::NotEq, zero, rhs);
-          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(res).unwrap();
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(res).unwrap();
           let store = c.program.func_mut(c.curr_func).dfg_mut().new_value().store(res, result);
-          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(store).unwrap();
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(store).unwrap();
           
           let jump = c.program.func_mut(c.curr_func).dfg_mut().new_value().jump(end_bb);
-          c.program.func_mut(c.curr_func).layout_mut().bb_mut(then_bb).insts_mut().push_key_back(jump).unwrap();
+          c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(jump).unwrap();
         }
         c.bb = end_bb;
         let result = c.program.func_mut(c.curr_func).dfg_mut().new_value().load(result);
