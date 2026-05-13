@@ -1,5 +1,5 @@
-use core::panic;
 use std::rc::Rc;
+use std::cell::Cell;
 use crate::ast::*;
 use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder};
 use koopa::ir::*;
@@ -64,6 +64,7 @@ fn traverse_func(program: &mut Program, func_def: &mut FuncDef, global_st: &Symb
     curr_func: *func,
     symbols: Rc::clone(&block.symbols),
     while_ctx: Vec::new(),
+    bb_count: Rc::new(Cell::new(0)),
   };
   let ret_bb = traverse_block(block, &mut ctx);
   let ret = program.func_mut(*func).dfg_mut().new_value().ret(None);
@@ -210,7 +211,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
       let ret = c.program.func_mut(c.curr_func).dfg_mut().new_value().ret(ret_val);
       c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(ret).unwrap();
       // unreachable block after return
-      c.bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      c.bb = c.new_bb();
       c.program.func_mut(c.curr_func).layout_mut().bbs_mut().push_key_back(c.bb).unwrap();
     },
     Stmt::Assign(lval, exp) => {
@@ -280,6 +281,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
         curr_func: c.curr_func,
         symbols: Rc::clone(&inner_block.symbols),
         while_ctx: c.while_ctx.clone(),
+        bb_count: Rc::clone(&c.bb_count),
       };
       c.bb = traverse_block(inner_block, &mut child_ctx);
     },
@@ -290,8 +292,8 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
     },
     Stmt::Cond(cond, then_b, else_b) => {
       let cond_val = cond.compile(c);
-      let then_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-      let end_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      let then_bb = c.new_bb();
+      let end_bb = c.new_bb();
       c.program.func_mut(c.curr_func).layout_mut().bbs_mut().extend([then_bb, end_bb]);
 
       // then 分支
@@ -301,7 +303,8 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
           program: c.program,
           curr_func: c.curr_func,
           symbols: Rc::clone(&c.symbols),
-          while_ctx: c.while_ctx.clone()
+          while_ctx: c.while_ctx.clone(),
+          bb_count: Rc::clone(&c.bb_count),
         };
         let then_end_bb = process_stmt(then_b, &mut then_ctx);
         let jump = c.program.func_mut(c.curr_func).dfg_mut().new_value().jump(end_bb);
@@ -309,7 +312,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
       }
       // else 分支（如有）
       if let Some(else_b) = else_b {
-        let else_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        let else_bb = c.new_bb();
         c.program.func_mut(c.curr_func).layout_mut().bbs_mut().extend([else_bb]);
         let br = c.program.func_mut(c.curr_func).dfg_mut().new_value().branch(cond_val, then_bb, else_bb);
         c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
@@ -319,7 +322,8 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
           program: c.program,
           curr_func: c.curr_func,
           symbols: Rc::clone(&c.symbols),
-          while_ctx: c.while_ctx.clone()
+          while_ctx: c.while_ctx.clone(),
+          bb_count: Rc::clone(&c.bb_count),
         };
         let else_end_bb = process_stmt(else_b, &mut else_ctx);
         let jump = c.program.func_mut(c.curr_func).dfg_mut().new_value().jump(end_bb);
@@ -332,9 +336,9 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
       c.bb = end_bb;
     },
     Stmt::While(cond, stmt) => {
-      let while_entry_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-      let while_body_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-      let while_end_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      let while_entry_bb = c.new_bb();
+      let while_body_bb = c.new_bb();
+      let while_end_bb = c.new_bb();
       c.while_ctx.push(WhileContext { entry: while_entry_bb, end: while_end_bb });
       c.program.func_mut(c.curr_func).layout_mut().bbs_mut().extend([while_entry_bb, while_body_bb, while_end_bb]);
       let jump = c.program.func_mut(c.curr_func).dfg_mut().new_value().jump(while_entry_bb);
@@ -356,7 +360,8 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
           program: c.program,
           curr_func: c.curr_func,
           symbols: Rc::clone(&c.symbols),
-          while_ctx: c.while_ctx.clone()
+          while_ctx: c.while_ctx.clone(),
+          bb_count: Rc::clone(&c.bb_count),
         };
         let body_end_bb = process_stmt(stmt, &mut while_ctx);
         let jump = c.program.func_mut(c.curr_func).dfg_mut().new_value().jump(while_entry_bb);
@@ -370,7 +375,7 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
       let jump = c.program.func_mut(c.curr_func).dfg_mut().new_value().jump(while_ctx.end);
       c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(jump).unwrap();
       // unreachable block after break
-      c.bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      c.bb = c.new_bb();
       c.program.func_mut(c.curr_func).layout_mut().bbs_mut().push_key_back(c.bb).unwrap();
     },
     Stmt::Continue => {
@@ -378,16 +383,9 @@ fn process_stmt(stmt: &mut Stmt, c: &mut Context) -> BasicBlock {
       let jump = c.program.func_mut(c.curr_func).dfg_mut().new_value().jump(while_ctx.entry);
       c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(jump).unwrap();
       // unreachable block after continue
-      c.bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+      c.bb = c.new_bb();
       c.program.func_mut(c.curr_func).layout_mut().bbs_mut().push_key_back(c.bb).unwrap();
     }
   }
   c.bb
-}
-pub fn generate_bb_name() -> String {
-  static mut BB_COUNT: u32 = 0;
-  unsafe {
-    BB_COUNT += 1;
-    format!("%bb{}", BB_COUNT)
-  }
 }

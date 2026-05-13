@@ -1,4 +1,3 @@
-use core::panic;
 use std::rc::Rc;
 use koopa::ir::{builder::{GlobalInstBuilder, ValueBuilder}, FunctionData, Program, Type};
 

@@ -1,6 +1,6 @@
-use core::panic;
-
 use koopa::ir::*;
+use std::rc::Rc;
+use std::cell::Cell;
 use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder, ValueBuilder};
 use crate::ast::{Symbols, SymbolsExt};
 use crate::ast::IdentInfo;
@@ -86,6 +86,21 @@ pub struct Context<'a> {
   pub curr_func: Function,
   pub symbols: Symbols, 
   pub while_ctx: Vec<WhileContext>,
+  pub bb_count: Rc<Cell<u32>>,
+}
+
+impl<'a> Context<'a> {
+  fn next_bb_name(&self) -> String {
+    let v = self.bb_count.get() + 1;
+    self.bb_count.set(v);
+    format!("%bb{}", v)
+  }
+
+  pub fn new_bb(&mut self) -> BasicBlock {
+    let name = Some(self.next_bb_name().into());
+    self.program.func_mut(self.curr_func).dfg_mut().new_bb().basic_block(name)
+  }
+
 }
 #[derive(Clone)]
 pub struct WhileContext {
@@ -331,7 +346,6 @@ impl Compile for MulExp {
 impl<T, S> Compile for Binary<T, S> 
 where T: Compile, S: Compile {
   fn compile(&self, c: &mut Context) -> Value {
-    use crate::converter::generate_bb_name;
     let lhs = self.lhs.compile(c);
     match self.op {
       // 执行短路操作
@@ -349,8 +363,8 @@ where T: Compile, S: Compile {
         let zero = c.program.func_mut(c.curr_func).dfg_mut().new_value().integer(0);
         let l0 = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::Eq, lhs, zero);
         c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(l0).unwrap();
-        let then_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-        let end_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        let then_bb = c.new_bb();
+        let end_bb = c.new_bb();
         c.program.func_mut(c.curr_func).layout_mut().bbs_mut().extend([then_bb, end_bb]);
         let br = c.program.func_mut(c.curr_func).dfg_mut().new_value().branch(l0, then_bb, end_bb);
         c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
@@ -395,8 +409,8 @@ where T: Compile, S: Compile {
 
         let l0 = c.program.func_mut(c.curr_func).dfg_mut().new_value().binary(BinaryOp::NotEq, lhs, zero);
         c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(l0).unwrap();
-        let then_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
-        let end_bb = c.program.func_mut(c.curr_func).dfg_mut().new_bb().basic_block(Some(generate_bb_name()));
+        let then_bb = c.new_bb();
+        let end_bb = c.new_bb();
         c.program.func_mut(c.curr_func).layout_mut().bbs_mut().extend([then_bb, end_bb]);
         let br = c.program.func_mut(c.curr_func).dfg_mut().new_value().branch(l0, then_bb, end_bb);
         c.program.func_mut(c.curr_func).layout_mut().bb_mut(c.bb).insts_mut().push_key_back(br).unwrap();
